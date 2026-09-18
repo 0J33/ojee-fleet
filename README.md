@@ -60,6 +60,25 @@ be the one you are sitting at, so it is a device in here like the others.
 
 **Logs** — the journal for a unit, on hosts whose API serves one.
 
+### Brief disconnects
+
+A laptop that sleeps, a box on Wi-Fi, a tunnel that re-dials: machines drop off for a minute and
+come back. Announcing every one of those is how a monitor gets muted, and a muted monitor misses
+the outage that mattered.
+
+So a host has a **grace window** — five minutes by default, `downGraceMs` in the config,
+`FLEET_DOWN_GRACE_MS` or a per-host `graceMs` to override. Inside it the host is `pending`:
+
+- it is **shown** as not answering, with how long it has been gone and when it will become an
+  alert — not alerting is not the same as not telling;
+- it raises **no alert**, and critically **its status does not move**, because a status change is
+  itself the thing that pings. Filtering the alert but flipping the host to `warn` would still
+  reach Discord and the phone by the other route;
+- if it comes back inside the window, nothing was ever sent — no "went down" and no "recovered".
+  A pager that reports a blip twice is worse than one that never reported it.
+
+Past the window it becomes an ordinary unreachable host, announced exactly once.
+
 ### Muting
 
 A rule that fires forever is a rule you learn to ignore, and ignoring one alert is a habit that
@@ -154,6 +173,8 @@ private deployment repo can commit it. Credentials come from the environment:
 | `DOCKER_SOCK` | default `/var/run/docker.sock` — the `local` adapter's services |
 | `DISCORD_WEBHOOK` | optional; transitions are posted here |
 | `FLEET_POLL_MS` | default 10000 |
+| `FLEET_DOWN_GRACE_MS` | default 300000 — how long a host may be missing before it is news |
+| `HOST_<ID>_GRACE_MS` | the same, for one host |
 | `PORT` / `BIND` | default `0.0.0.0:8400` |
 
 Mounted in a console, add it to `config/console.json` like any other module.

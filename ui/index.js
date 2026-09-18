@@ -192,7 +192,7 @@ function hostCard(h) {
   // across nine tenths of the target.
   const open = () => { state.selected = h.id; go('hosts'); };
   return el('article', {
-    class: `panel fl-card is-clickable ${h.online ? '' : 'is-off'}`,
+    class: `panel fl-card is-clickable ${h.online ? '' : h.pending ? 'is-blip' : 'is-off'}`,
     role: 'button',
     tabindex: '0',
     'aria-label': `Open ${h.name}`,
@@ -202,7 +202,10 @@ function hostCard(h) {
     },
   },
   el('header', { class: 'fl-card-head' },
-    dot(h.status || (h.online ? 'ok' : 'err')),
+    // A blip gets its own mark: neither the green that says all is well nor
+    // the red that says come and look.
+    h.pending ? el('span', { class: 'dot fl-dot-pending', title: 'not answering' })
+      : dot(h.status || (h.online ? 'ok' : 'err')),
     el('span', { class: 'fl-card-name' }, h.name),
     el('span', { class: 'fl-card-role meta' }, h.role || h.kind)),
 
@@ -216,10 +219,15 @@ function hostCard(h) {
         worstDisk ? bar(worstDisk.pct, `Disk ${worstDisk.label}`,
           { text: `${fmtPct(worstDisk.pct)} · ${fmtBytes(worstDisk.total - worstDisk.used)} free` }) : null,
         h.gpu ? bar(h.gpu.pct, 'GPU', { text: `${fmtPct(h.gpu.pct)}${Number.isFinite(h.gpu.tempC) ? ` · ${fmtTemp(h.gpu.tempC)}` : ''}` }) : null)
-      : el('div', { class: 'fl-card-off' },
-        el('strong', {}, 'Unreachable'),
+      : el('div', { class: `fl-card-off ${h.pending ? 'is-pending' : ''}` },
+        // A blip says so plainly and does not shout. It is still on screen —
+        // not alerting is not the same as not telling.
+        el('strong', {}, h.pending ? 'Not answering' : 'Unreachable'),
         el('span', { class: 'meta' }, h.error || ''),
-        el('span', { class: 'meta' }, `last seen ${ago(h.lastSeen)}`)),
+        el('span', { class: 'meta' },
+          h.pending
+            ? `retrying · ${ago(h.downSince)} so far, alerts after ${Math.round((h.graceMs || 0) / 60000)} min`
+            : `last seen ${ago(h.lastSeen)}`)),
 
     el('footer', { class: 'fl-card-foot' },
       el('span', { class: 'meta' },
@@ -272,7 +280,9 @@ function viewHosts(d) {
         state.procs = null; state.procsFor = null; state.procQuery = '';
         loadDetail(); render();
       },
-    }, dot(h.status || (h.online ? 'ok' : 'err')), h.name)));
+    },
+    h.pending ? el('span', { class: 'dot fl-dot-pending' }) : dot(h.status || (h.online ? 'ok' : 'err')),
+    h.name)));
 
   const facts = el('dl', { class: 'fl-facts' },
     [['Role', current.role || '—'],
@@ -360,9 +370,12 @@ function viewHosts(d) {
   return el('section', { class: 'stack-lg' },
     picker,
     !current.online
-      ? el('div', { class: 'alert alert--err' },
-        `${current.name} is unreachable — ${current.error || 'no reason given'}. `
-        + `Last seen ${ago(current.lastSeen)}.`)
+      ? el('div', { class: `alert ${current.pending ? 'alert--warn' : 'alert--err'}` },
+        current.pending
+          ? `${current.name} has not answered since ${ago(current.downSince)} — ${current.error || 'no reason given'}. `
+            + `Brief drops are not reported; this becomes an alert after ${Math.round((current.graceMs || 0) / 60000)} minutes.`
+          : `${current.name} is unreachable — ${current.error || 'no reason given'}. `
+            + `Last seen ${ago(current.lastSeen)}.`)
       : null,
     el('section', { class: 'panel stack' }, el('h3', { class: 'h3' }, current.name), facts),
     charts,

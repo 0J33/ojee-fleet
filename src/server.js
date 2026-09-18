@@ -74,21 +74,33 @@ app.get('/api/health', (req, res) => {
   // the module is successfully reporting, not the module failing — marking
   // ourselves unhealthy for it would make the console hide the one page that
   // explains what is wrong.
-  res.json({ ok: true, hosts: s.total, online: s.online, status: s.status });
+  res.json({
+    ok: true,
+    hosts: s.total,
+    online: s.online,
+    pending: s.hosts.filter((h) => h.pending).length,
+    status: s.status,
+  });
 });
 
 /* ── the console's front page ───────────────────────────────────────────── */
 
 app.get('/api/summary', (req, res) => {
   const s = poller.snapshot();
-  const down = s.hosts.filter((h) => !h.online);
+  // A host inside its grace window is not reported as down: it is a blip that
+  // has not yet earned anyone's attention, and saying "1 of 3 unreachable" on
+  // the front page IS telling you about it.
+  const down = s.hosts.filter((h) => !h.online && !h.pending);
+  const blipping = s.hosts.filter((h) => !h.online && h.pending);
   const degraded = s.hosts.filter((h) => h.online && h.status !== 'ok');
 
   const headline = down.length
     ? `${down.length} of ${s.total} unreachable`
     : degraded.length
       ? `${s.total} hosts · ${degraded.length} need attention`
-      : `${s.total} hosts · all healthy`;
+      : blipping.length
+        ? `${s.total} hosts · ${blipping.map((h) => h.name).join(', ')} not answering`
+        : `${s.total} hosts · all healthy`;
 
   // Four facts, and each one has to be worth the space on a front page.
   //
@@ -117,7 +129,11 @@ app.get('/api/summary', (req, res) => {
   const facts = [
     {
       k: 'Machines',
-      v: down.length ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down` : `${s.total} up`,
+      v: down.length
+        ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down`
+        : blipping.length
+          ? `${s.online} up · ${blipping.map((h) => h.name).join(', ')} retrying`
+          : `${s.total} up`,
     },
     services.length
       ? {

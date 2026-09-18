@@ -108,8 +108,13 @@ export class Poller extends EventEmitter {
 
     if (next.online) {
       this.lastSeen.set(host.id, this.now());
+      next.downSince = null;
+      next.failures = 0;
+      next.pending = false;
     } else {
       // Keep the last good picture alongside the failure.
+      const downSince = prev?.downSince || this.now();
+      const graceMs = Number.isFinite(host.graceMs) ? host.graceMs : 0;
       next = {
         ...next,
         cpu: next.cpu ?? prev?.cpu ?? null,
@@ -118,6 +123,14 @@ export class Poller extends EventEmitter {
         disks: next.disks?.length ? next.disks : (prev?.disks || []),
         services: next.services?.length ? next.services : (prev?.services || []),
         stale: true,
+        downSince,
+        failures: (prev?.failures || 0) + 1,
+        // Inside the grace window this is a blip, not an outage: it is shown
+        // on the page — you can see the machine is not answering and for how
+        // long — but it raises nothing, changes no status, and therefore
+        // cannot reach Discord or a phone.
+        pending: this.now() - downSince < graceMs,
+        graceMs,
       };
     }
 
@@ -147,6 +160,15 @@ export class Poller extends EventEmitter {
     );
     next.muted = host.mute || [];
     next.status = next.online ? worst(next.alerts) : 'err';
+
+    // A host inside its grace window keeps the status it had. Flipping to
+    // warn would be a transition, and a transition is exactly the thing that
+    // pings — so "do not alert for brief disconnects" has to mean the status
+    // does not move either, not merely that the alert is filtered later.
+    if (!next.online && next.pending) {
+      next.alerts = next.alerts.filter((a) => a.kind !== 'unreachable');
+      next.status = prev?.status && prev.status !== 'unknown' ? prev.status : 'ok';
+    }
 
     const before = prev?.status;
     this.state.set(host.id, next);

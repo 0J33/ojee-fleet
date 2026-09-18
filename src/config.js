@@ -56,11 +56,22 @@ export function loadConfig() {
         mute: envMute != null
           ? envMute.split(',').map((x) => x.trim()).filter(Boolean)
           : (h.mute || []),
+        // How long this host may be unreachable before anyone is told. A
+        // laptop that sleeps, a box on Wi-Fi, a tunnel that re-dials: these
+        // go away for a minute and come back, and a monitor that announces
+        // every one of them is a monitor you mute.
+        graceMs: Number(process.env[`HOST_${key}_GRACE_MS`] ?? h.graceMs ?? NaN),
       };
     });
 
+  const defaultGrace = Number(process.env.FLEET_DOWN_GRACE_MS || raw.downGraceMs || 300_000);
+  for (const h of hosts) {
+    if (!Number.isFinite(h.graceMs)) h.graceMs = defaultGrace;
+  }
+
   return {
     hosts,
+    downGraceMs: defaultGrace,
     // Polling every 10s across three machines is nothing, and it is the
     // difference between a page that is current and one that is a minute old.
     intervalMs: Number(process.env.FLEET_POLL_MS || raw.intervalMs || 10_000),

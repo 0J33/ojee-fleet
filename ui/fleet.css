@@ -58,6 +58,15 @@ button.fl-row:hover .fl-row-name { color: var(--accent); }
 }
 .fl-card { display: flex; flex-direction: column; gap: var(--s-3); }
 .fl-card.is-off { border-color: var(--err); }
+/* Not answering, but not yet news: visible without the alarm colour. */
+.fl-card.is-blip { border-color: var(--warn); border-style: dashed; }
+.fl-card-off.is-pending strong { color: var(--warn); }
+.fl-dot-pending {
+  background: var(--warn);
+  animation: fl-blip 1.6s ease-in-out infinite;
+}
+@keyframes fl-blip { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .fl-dot-pending { animation: none; } }
 .fl-card.is-clickable { cursor: pointer; transition: var(--t); }
 .fl-card.is-clickable:hover { border-color: var(--line-hover); }
 .fl-card.is-clickable:hover .fl-card-name { color: var(--accent); }
