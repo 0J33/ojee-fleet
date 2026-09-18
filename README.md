@@ -9,20 +9,24 @@ Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) mo
 
 ## The idea it is built on
 
-**It collects nothing.** Every machine here already exposes what it knows: a Flask dashboard on
-one, a Node agent on another, a Python sampler reading `/proc` on the laptop. This module reads
-those and normalizes them.
+**Remote machines are read through whatever they already expose** — a Flask dashboard on one, a
+Python sampler reading `/proc` on the laptop. Nothing new gets installed anywhere.
 
 The obvious alternative — write one agent, install it everywhere — is worse in the way that
 matters. A fleet view whose job is to tell you about the machine you have been ignoring can only
 show machines you already got around to installing something on. That is exactly backwards.
 
-So a new machine is an **adapter**, about eighty lines, and nothing else in the repo changes:
+**The machine this runs on is the exception, and reads itself.** Asking another service on the
+same host what that host is doing is a round trip to learn something already on disk — and it left
+monitoring living inside a module that is about something else entirely.
+
+So a new machine is an **adapter**, about a hundred lines, and nothing else in the repo changes:
 
 ```
 src/adapters/teg.js      disinteg   — Flask dashboard API, shared bearer
-src/adapters/agent.js    hp         — ojee-agent, systeminformation + docker
 src/adapters/loq.js      loq        — ojee-loq, /proc + RAPL + nvidia-smi
+src/adapters/local.js    hp         — this host: /proc, /sys, docker.sock
+src/adapters/agent.js    (spare)    — ojee-agent, for a box that runs one
 ```
 
 Each returns the same shape. `src/normalize.js` defines it, and holds the thresholds — the one
@@ -71,6 +75,14 @@ rule cannot colour the host red, so it cannot reach Discord or the phone by anot
 ---
 
 ## Things that took getting right
+
+**Memory uses `MemAvailable`, not `MemFree`.** The kernel's own answer to "how much can a new
+process have" accounts for reclaimable page cache. `MemTotal - MemFree` does not, which is why so
+many dashboards insist a perfectly healthy Linux box is at 95% memory.
+
+**The first CPU sample has no percentage.** Utilisation is a delta between two readings of
+`/proc/stat`, so the first one after a start reports `null` rather than 0 — "we do not know yet"
+and "the machine is idle" are different claims.
 
 **A missing number is reported as missing.** The laptop's sampler collects no RAM at all. A bar
 pinned at 0% would be a statement about a machine that is using memory perfectly normally, so the
@@ -133,6 +145,9 @@ private deployment repo can commit it. Credentials come from the environment:
 |---|---|
 | `HOST_<ID>_TOKEN` | the bearer that host's API wants |
 | `HOST_<ID>_ORIGIN` | override the origin (container names, a box that moved) |
+| `HOST_<ID>_MUTE` | comma list of alert kinds this host should not raise |
+| `HOST_ROOT` | where the host filesystem is visible (`/host` in a container) |
+| `DOCKER_SOCK` | default `/var/run/docker.sock` — the `local` adapter's services |
 | `DISCORD_WEBHOOK` | optional; transitions are posted here |
 | `FLEET_POLL_MS` | default 10000 |
 | `PORT` / `BIND` | default `0.0.0.0:8400` |

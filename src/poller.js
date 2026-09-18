@@ -25,11 +25,13 @@ import { applyMutes, deriveAlerts, worst } from './normalize.js';
 import * as tegAdapter from './adapters/teg.js';
 import * as agentAdapter from './adapters/agent.js';
 import * as loqAdapter from './adapters/loq.js';
+import * as localAdapter from './adapters/local.js';
 
 const ADAPTERS = {
   teg: tegAdapter,
   agent: agentAdapter,
   loq: loqAdapter,
+  local: localAdapter,
 };
 
 export class Poller extends EventEmitter {

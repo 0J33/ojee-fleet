@@ -4,8 +4,12 @@
     "It holds no secrets \u2014 HOST_<ID>_TOKEN in the environment supplies those \u2014",
     "so a private deployment repo can commit it.",
     "",
-    "kind picks the adapter: teg | agent | loq. Each one speaks to an API that",
-    "already exists on that machine.",
+    "kind picks the adapter:",
+    "  teg    a Flask dashboard API, shared bearer",
+    "  agent  ojee-agent, systeminformation + docker",
+    "  loq    ojee-loq, /proc + RAPL + nvidia-smi",
+    "  local  the machine this module runs on \u2014 /proc, /sys, docker.sock,",
+    "         no origin and no token, because there is nothing to dial",
     "",
     "mute lists alert kinds this host should never raise. See ALERT_KINDS in",
     "src/normalize.js. Muting is per host on purpose: 95\u00b0C means nothing on a",
@@ -35,9 +39,8 @@
     {
       "id": "hp",
       "name": "ojee-hp-zorin",
-      "role": "Home lab \u00b7 containers, n8n, CouchDB",
-      "kind": "agent",
-      "origin": "http://agentmod:8080",
+      "role": "Home lab \u00b7 the box this runs on",
+      "kind": "local",
       "enabled": true
     },
     {

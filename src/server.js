@@ -5,13 +5,17 @@
  * console has already decided who you are; standalone, it is tailnet-only and
  * single-purpose, which is the same bargain every other module makes.
  *
- * What it deliberately does not do is collect anything itself. Each machine
- * already exposes what it knows — a Flask dashboard here, a Node agent there,
- * a Python sampler on the laptop — so this reads those and normalizes. The
- * alternative, one agent of my own on every box, would mean the fleet view
- * could only ever show machines I had already got around to installing
- * something on, which is exactly backwards for a thing whose job is to tell
- * me about the machine I have been ignoring.
+ * REMOTE machines are read through whatever they already expose — a Flask
+ * dashboard here, a Python sampler on the laptop — rather than through an
+ * agent of my own installed on each one. That alternative would mean the fleet
+ * view could only ever show machines I had already got around to installing
+ * something on, which is exactly backwards for a thing whose job is to tell me
+ * about the machine I have been ignoring.
+ *
+ * The machine this module RUNS on is the exception, and reads itself: asking
+ * another service on the same host what that host is doing is a round trip to
+ * learn something already on disk, and it left monitoring tangled up in a
+ * module that is about something else entirely.
  */
 
 import express from 'express';
@@ -19,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig } from './config.js';
-import { Poller } from './poller.js';
+import { ADAPTERS, Poller } from './poller.js';
 import { Notifier } from './notify.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -154,6 +158,20 @@ app.post('/api/hosts/:id/action', async (req, res) => {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(action)) {
     return res.status(400).json({ error: 'bad action name' });
   }
+  // An adapter that acts on the machine directly (the local one restarts a
+  // container over the Docker socket) does it here; everything else is
+  // forwarded to the host's own allowlist.
+  const adapter = ADAPTERS[host.kind];
+  if (typeof adapter?.action === 'function') {
+    try {
+      const out = await adapter.action(action.replace(/^restart-/, ''));
+      poller.probeOne(host).catch(() => {});
+      return res.json(out);
+    } catch (e) {
+      return res.status(502).json({ error: e.message });
+    }
+  }
+
   try {
     const upstream = await fetch(new URL('/api/action', host.origin), {
       method: 'POST',
