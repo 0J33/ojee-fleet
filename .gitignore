@@ -1,0 +1,4 @@
+node_modules/
+config/fleet.json
+.env
+*.log

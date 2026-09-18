@@ -1,0 +1,32 @@
+{
+  "failed": [
+    {
+      "unit": "example-api.service",
+      "scope": "system",
+      "since": 1789600000,
+      "detail": "Failed with result 'exit-code'."
+    },
+    {
+      "unit": "example-worker.service",
+      "scope": "user",
+      "since": 1789600500,
+      "detail": "Start request repeated too quickly."
+    }
+  ],
+  "listeners": [
+    {
+      "ip": "127.0.0.1",
+      "port": 5200,
+      "pid": 1234,
+      "process": "python3",
+      "public": false
+    },
+    {
+      "ip": "0.0.0.0",
+      "port": 80,
+      "pid": 1235,
+      "process": "nginx",
+      "public": true
+    }
+  ]
+}

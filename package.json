@@ -1,0 +1,18 @@
+{
+  "name": "ojee-fleet",
+  "version": "1.0.0",
+  "description": "Every machine that is mine, on one page. Runs standalone or as an ojee-console module.",
+  "license": "MIT",
+  "author": "ojee <https://ojee.net>",
+  "repository": { "type": "git", "url": "git+https://github.com/0J33/ojee-fleet.git" },
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}

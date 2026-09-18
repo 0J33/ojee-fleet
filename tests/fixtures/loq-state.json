@@ -1,0 +1,130 @@
+{
+  "at": 1789692850.7665641,
+  "name": "OJEE-LOQ-ZORIN",
+  "cpu": {
+    "model": "Core i7-14700HX",
+    "usage": 3.9,
+    "cores": [
+      4.0,
+      1.4,
+      6.0,
+      0.5,
+      6.1,
+      0.8,
+      6.4,
+      0.5,
+      12.2,
+      3.2,
+      12.5,
+      2.0,
+      7.6,
+      0.4,
+      6.9,
+      0.6,
+      5.1,
+      4.7,
+      4.1,
+      3.4,
+      2.8,
+      2.7,
+      2.4,
+      2.3,
+      2.5,
+      2.2,
+      2.2,
+      2.4
+    ],
+    "tempC": 82.0,
+    "watts": 31.5,
+    "tdp": 200,
+    "throttled": 2210580
+  },
+  "gpu": {
+    "model": "RTX 5060 Laptop \u00b7 8 GB",
+    "usage": 4.0,
+    "tempC": 68.0,
+    "clockMhz": 2812.0,
+    "memClockMhz": 9001.0,
+    "vramUsedMb": 1029.0,
+    "vramTotalMb": 8151.0,
+    "watts": 22.31
+  },
+  "fans": {
+    "cpuRpm": 3500,
+    "gpuRpm": 3700
+  },
+  "battery": {
+    "percent": 79,
+    "status": "Not charging",
+    "cycles": 147,
+    "healthPct": 102,
+    "powerW": 0.6,
+    "history": {
+      "since": "2026-02-25",
+      "first_h": "102",
+      "cur_h": "102",
+      "n": 148
+    }
+  },
+  "io": {
+    "netRxPerS": 146405,
+    "netTxPerS": 101221,
+    "diskReadPerS": 7986,
+    "diskWritePerS": 2692
+  },
+  "state": {
+    "profile": "performance",
+    "conservation": true,
+    "fnLock": false,
+    "kbdBacklight": 0,
+    "gpuMode": "nvidia",
+    "micMuted": false,
+    "touchpad": true
+  },
+  "drives": [
+    {
+      "dev": "nvme0n1",
+      "model": "Micron MTFDKCD512QGN-1BN1AABLA",
+      "size": 512110190592
+    },
+    {
+      "dev": "nvme1n1",
+      "model": "WD Blue SN5000 2TB",
+      "size": 2000398934016
+    },
+    {
+      "dev": "sda",
+      "model": "SA400M8480G",
+      "size": 480103981056
+    }
+  ],
+  "nics": [
+    {
+      "iface": "tailscale0",
+      "kind": "vpn",
+      "ssid": null,
+      "ip": "100.100.100.100"
+    },
+    {
+      "iface": "wlp0s0",
+      "kind": "wifi",
+      "ssid": "example-wifi",
+      "ip": "192.0.2.10"
+    }
+  ],
+  "controls": {
+    "profile": true,
+    "conservation": true,
+    "fnLock": true,
+    "kbdBacklight": true,
+    "micMuted": true,
+    "touchpad": true,
+    "cpuTdp": true,
+    "gpuClock": true,
+    "gpuMemClock": true,
+    "gpuTgp": true,
+    "gpuMode": true,
+    "advancedEnabled": false
+  },
+  "pending": null
+}

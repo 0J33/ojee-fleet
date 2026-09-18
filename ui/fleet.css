@@ -1,0 +1,167 @@
+/* ============================================================
+   ojee-fleet — module styles.
+
+   Every selector is prefixed. A module's stylesheet loads into the
+   console's document alongside every other module's, so a bare
+   `.card` or a `*` rule here would quietly restyle somebody else's
+   page — and the design system's own class names belong to the
+   design system, not to whichever module loaded last.
+   ============================================================ */
+
+/* ── status ──────────────────────────────────────────────────────────── */
+
+.fl-dot {
+  display: inline-block; flex: none;
+  width: 8px; height: 8px;
+  background: var(--dim);
+}
+.fl-dot.is-ok   { background: var(--ok, var(--accent)); box-shadow: 0 0 8px var(--glow-soft); }
+.fl-dot.is-warn { background: var(--warn); box-shadow: 0 0 8px rgba(255, 176, 32, 0.5); }
+.fl-dot.is-err  { background: var(--err); box-shadow: 0 0 8px rgba(255, 68, 68, 0.5); }
+
+.fl-verdict {
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
+  padding: var(--s-3);
+  background: var(--bg-1); border: 1px solid var(--line);
+}
+.fl-verdict strong { font-family: var(--mono); font-size: 0.82rem; color: var(--ink); }
+.fl-live { margin-left: auto; }
+
+/* ── host cards ──────────────────────────────────────────────────────── */
+
+.fl-grid {
+  display: grid; gap: var(--s-3);
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+.fl-card { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3); }
+.fl-card.is-off { border-color: var(--err); }
+.fl-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.fl-card-name {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  font-family: var(--mono); font-size: 0.82rem; color: var(--ink);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fl-card-name:hover { color: var(--accent); }
+.fl-card-role {
+  margin-left: auto; flex: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%;
+}
+.fl-card-body { display: grid; gap: var(--s-2); }
+.fl-card-off { display: grid; gap: 4px; padding: var(--s-2) 0; }
+.fl-card-off strong { color: var(--err); font-family: var(--mono); font-size: 0.76rem; }
+.fl-card-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
+  padding-top: var(--s-2); border-top: 1px solid var(--line);
+}
+
+.fl-metric { display: grid; gap: 5px; }
+.fl-metric-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); }
+.fl-metric-val { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2); }
+.fl-metric--absent { opacity: 0.55; }
+
+/* ── charts ──────────────────────────────────────────────────────────── */
+
+.fl-charts { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.fl-chart { display: grid; gap: 6px; }
+.fl-spark {
+  width: 100%; height: 34px; display: block;
+  background: var(--bg-0); border: 1px solid var(--line);
+}
+.fl-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
+.fl-spark--empty { height: 34px; background: var(--bg-0); border: 1px dashed var(--line); }
+
+/* ── host picker ─────────────────────────────────────────────────────── */
+
+.fl-picker { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.fl-pick {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; min-height: 36px;
+  background: var(--panel); border: 1px solid var(--line-strong); color: var(--ink-2);
+  font-family: var(--mono); font-size: 0.72rem; cursor: pointer; transition: var(--t);
+}
+.fl-pick:hover { border-color: var(--line-hover); color: var(--ink); }
+.fl-pick.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-08); }
+
+/* ── facts ───────────────────────────────────────────────────────────── */
+
+.fl-facts {
+  display: grid; gap: var(--s-2) var(--s-3); margin: 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.fl-facts div { min-width: 0; }
+.fl-facts dt {
+  font-family: var(--hud); font-size: 0.54rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--dim);
+}
+.fl-facts dd {
+  margin: 3px 0 0; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.fl-two { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
+.fl-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.fl-toolbar { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ── alerts ──────────────────────────────────────────────────────────── */
+
+.fl-alerts { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.fl-alert {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px var(--s-3); min-height: 40px;
+  background: var(--bg-1); border: 0; cursor: pointer; text-align: left;
+  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+}
+.fl-alert:hover { background: var(--accent-03); color: var(--ink); }
+.fl-alert.is-err .fl-alert-text { color: var(--err); }
+.fl-alert.is-warn .fl-alert-text { color: var(--warn); }
+.fl-alert-text { flex: 1 1 auto; min-width: 0; }
+.fl-alert-hint { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── services ────────────────────────────────────────────────────────── */
+
+.fl-svcs { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.fl-svc {
+  display: grid; align-items: center; gap: var(--s-2);
+  grid-template-columns: 8px minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 1fr) auto;
+  padding: 8px var(--s-3); min-height: 40px;
+  background: var(--bg-1);
+  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+}
+.fl-svc.is-down { background: var(--err-wash); }
+.fl-svc-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-svc-host, .fl-svc-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.fl-drives { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
+.fl-drive {
+  display: grid; align-items: center; gap: var(--s-2);
+  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1.4fr) auto auto;
+  padding: 8px var(--s-3); background: var(--bg-1);
+  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
+}
+.fl-drive-dev { color: var(--ink); }
+.fl-drive-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── logs ────────────────────────────────────────────────────────────── */
+
+.fl-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.fl-log {
+  margin: 0; padding: var(--s-3);
+  background: var(--bg-0); border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 0.66rem; line-height: 1.5; color: var(--ink-2);
+  max-height: 46vh; overflow: auto; white-space: pre;
+}
+.fl-log--loading { display: grid; gap: 7px; align-content: start; min-height: 160px; white-space: normal; }
+.fl-log-skel { height: 9px; display: block; }
+
+/* ── narrow ──────────────────────────────────────────────────────────── */
+
+@media (max-width: 720px) {
+  .fl-grid { grid-template-columns: minmax(0, 1fr); }
+  .fl-card-role { display: none; }
+  /* Four columns of service metadata do not fit a phone. The host and the
+     detail go; the name, the state and the action are what you came for. */
+  .fl-svc { grid-template-columns: 8px minmax(0, 1fr) auto; }
+  .fl-svc-host, .fl-svc-detail { display: none; }
+  .fl-alert-hint { display: none; }
+  .fl-facts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+}

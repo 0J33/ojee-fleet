@@ -1,0 +1,234 @@
+/**
+ * ojee-fleet — every machine that is mine, on one page.
+ *
+ * Runs standalone or as an ojee-console module. It owns no auth: mounted, the
+ * console has already decided who you are; standalone, it is tailnet-only and
+ * single-purpose, which is the same bargain every other module makes.
+ *
+ * What it deliberately does not do is collect anything itself. Each machine
+ * already exposes what it knows — a Flask dashboard here, a Node agent there,
+ * a Python sampler on the laptop — so this reads those and normalizes. The
+ * alternative, one agent of my own on every box, would mean the fleet view
+ * could only ever show machines I had already got around to installing
+ * something on, which is exactly backwards for a thing whose job is to tell
+ * me about the machine I have been ignoring.
+ */
+
+import express from 'express';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { loadConfig } from './config.js';
+import { Poller } from './poller.js';
+import { Notifier } from './notify.js';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.join(HERE, '..');
+
+const config = loadConfig();
+const app = express();
+app.use(express.json({ limit: '64kb' }));
+app.disable('x-powered-by');
+
+const poller = new Poller({
+  hosts: config.hosts,
+  intervalMs: config.intervalMs,
+  historyLength: config.historyLength,
+}).start();
+
+const notifier = new Notifier(config.notify);
+poller.on('transition', (t) => { notifier.transition(t); });
+
+/* ── the manifest ───────────────────────────────────────────────────────── */
+
+const VIEWS = [
+  { id: 'overview', label: 'Overview', icon: 'i-grid' },
+  { id: 'hosts', label: 'Hosts', icon: 'i-server' },
+  { id: 'services', label: 'Services', icon: 'i-gauge' },
+  { id: 'alerts', label: 'Alerts', icon: 'i-warn' },
+];
+
+app.get('/module.json', (req, res) => {
+  res.json({
+    id: process.env.MODULE_ID || 'fleet',
+    name: process.env.MODULE_NAME || 'Fleet',
+    version: '1.0.0',
+    views: VIEWS,
+    ui: '/ui/index.js',
+    health: '/api/health',
+    capabilities: ['summary', 'sse'],
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  const s = poller.snapshot();
+  // Healthy means THIS SERVICE is healthy. A host being down is information
+  // the module is successfully reporting, not the module failing — marking
+  // ourselves unhealthy for it would make the console hide the one page that
+  // explains what is wrong.
+  res.json({ ok: true, hosts: s.total, online: s.online, status: s.status });
+});
+
+/* ── the console's front page ───────────────────────────────────────────── */
+
+app.get('/api/summary', (req, res) => {
+  const s = poller.snapshot();
+  const down = s.hosts.filter((h) => !h.online);
+  const degraded = s.hosts.filter((h) => h.online && h.status !== 'ok');
+
+  const headline = down.length
+    ? `${down.length} of ${s.total} unreachable`
+    : degraded.length
+      ? `${s.total} hosts · ${degraded.length} need attention`
+      : `${s.total} hosts · all healthy`;
+
+  res.json({
+    status: s.status === 'unknown' ? 'warn' : s.status,
+    headline,
+    facts: s.hosts.slice(0, 4).map((h) => ({
+      k: h.name,
+      v: !h.online ? 'offline'
+        : Number.isFinite(h.cpu?.pct) ? `${Math.round(h.cpu.pct)}% cpu`
+          : h.status,
+    })),
+    alerts: s.alerts.slice(0, 5).map((a) => ({
+      text: a.text, severity: a.severity, view: 'alerts',
+    })),
+  });
+});
+
+/* ── hosts ──────────────────────────────────────────────────────────────── */
+
+app.get('/api/hosts', (req, res) => res.json(poller.snapshot()));
+
+app.get('/api/hosts/:id', (req, res) => {
+  const h = poller.get(req.params.id);
+  if (!h) return res.status(404).json({ error: 'no such host' });
+  return res.json({ ...h, history: poller.history.get(req.params.id) || [] });
+});
+
+app.get('/api/hosts/:id/history', (req, res) => {
+  if (!poller.get(req.params.id)) return res.status(404).json({ error: 'no such host' });
+  return res.json({ samples: poller.history.get(req.params.id) || [] });
+});
+
+/** Logs, for hosts whose API has them. Proxied rather than re-implemented. */
+app.get('/api/hosts/:id/logs/:unit', async (req, res) => {
+  const host = config.hosts.find((h) => h.id === req.params.id);
+  const state = poller.get(req.params.id);
+  if (!host || !state) return res.status(404).json({ error: 'no such host' });
+  if (!state.capabilities?.logs) {
+    return res.status(501).json({ error: `${state.name} does not serve logs` });
+  }
+  const unit = String(req.params.unit);
+  if (!/^[a-zA-Z0-9._@-]{1,64}$/.test(unit)) {
+    return res.status(400).json({ error: 'bad unit name' });
+  }
+  try {
+    const url = new URL(`/api/journal/${encodeURIComponent(unit)}`, host.origin);
+    const upstream = await fetch(url, {
+      headers: host.token ? { authorization: `Bearer ${host.token}` } : {},
+      signal: AbortSignal.timeout(10_000),
+    });
+    const body = await upstream.json();
+    return res.status(upstream.status).json(body);
+  } catch (e) {
+    return res.status(502).json({ error: e.message });
+  }
+});
+
+/**
+ * Service actions. The allowlist lives on each host, not here: this forwards
+ * a named action and lets the machine decide whether it is one it performs.
+ * A fleet module that could run arbitrary commands on three boxes would be a
+ * much more interesting thing to compromise than a fleet module that cannot.
+ */
+app.post('/api/hosts/:id/action', async (req, res) => {
+  const host = config.hosts.find((h) => h.id === req.params.id);
+  const state = poller.get(req.params.id);
+  if (!host || !state) return res.status(404).json({ error: 'no such host' });
+  if (!state.capabilities?.actions) {
+    return res.status(501).json({ error: `${state.name} does not accept actions` });
+  }
+  const action = String(req.body?.action || '');
+  if (!/^[a-z0-9][a-z0-9._-]{0,63}$/i.test(action)) {
+    return res.status(400).json({ error: 'bad action name' });
+  }
+  try {
+    const upstream = await fetch(new URL('/api/action', host.origin), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(host.token ? { authorization: `Bearer ${host.token}` } : {}),
+      },
+      body: JSON.stringify({ action }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const body = await upstream.json().catch(() => ({}));
+    // Whatever just happened, the cached picture is now out of date.
+    poller.probeOne(host).catch(() => {});
+    return res.status(upstream.status).json(body);
+  } catch (e) {
+    return res.status(502).json({ error: e.message });
+  }
+});
+
+/* ── live updates ───────────────────────────────────────────────────────── */
+
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  res.write(': connected\n\n');
+
+  const send = (event, data) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  send('state', poller.snapshot());
+
+  const onUpdate = (s) => send('state', s);
+  const onTransition = ({ host, from, to }) => {
+    send('notify', {
+      title: to === 'ok' ? `${host.name} recovered` : `${host.name} is ${to}`,
+      body: (host.alerts || [])[0]?.text || `was ${from}`,
+      tag: `fleet:${host.id}:${to}`,
+    });
+  };
+  poller.on('update', onUpdate);
+  poller.on('transition', onTransition);
+
+  // Proxies drop a stream that says nothing for long enough; a comment is not
+  // an event, so this costs the client nothing to ignore.
+  const beat = setInterval(() => res.write(': ping\n\n'), 25_000);
+
+  req.on('close', () => {
+    clearInterval(beat);
+    poller.off('update', onUpdate);
+    poller.off('transition', onTransition);
+  });
+});
+
+/* ── static ─────────────────────────────────────────────────────────────── */
+
+app.use('/ui', express.static(path.join(ROOT, 'ui'), {
+  setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
+}));
+app.use(express.static(path.join(ROOT, 'public'), {
+  setHeaders: (res) => res.setHeader('cache-control', 'no-cache'),
+}));
+
+const port = Number(process.env.PORT || 8400);
+const bind = process.env.BIND || '0.0.0.0';
+
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(port, bind, () => {
+    const names = config.hosts.map((h) => h.id).join(', ') || 'none configured';
+    // eslint-disable-next-line no-console
+    console.log(`fleet on ${bind}:${port} — watching ${names}`);
+  });
+}
+
+export { app, poller, config };

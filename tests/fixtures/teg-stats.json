@@ -1,0 +1,111 @@
+{
+  "hostname": "example-host",
+  "os": "Linux 6.17.0-35-generic",
+  "arch": "x86_64",
+  "uptime": 4941048,
+  "cpu": {
+    "cores": 12,
+    "physical": 6,
+    "percent": [
+      4.0,
+      0.0,
+      0.0,
+      0.0,
+      2.0,
+      18.0,
+      5.9,
+      2.0,
+      6.1,
+      4.2,
+      9.4,
+      2.0
+    ],
+    "avg": 4.466666666666667,
+    "load": [
+      0.64111328125,
+      0.802734375,
+      0.8017578125
+    ]
+  },
+  "memory": {
+    "total": 16466124800,
+    "used": 9946726400,
+    "available": 6519398400,
+    "percent": 60.4
+  },
+  "swap": {
+    "total": 17179865088,
+    "used": 1994678272,
+    "percent": 11.6
+  },
+  "disk": {
+    "total": 983151181824,
+    "used": 42881196032,
+    "free": 890253172736,
+    "percent": 4.6
+  },
+  "disk_io": {
+    "read_per_s": 505,
+    "write_per_s": 312922
+  },
+  "network": {
+    "sent_per_s": 17830,
+    "recv_per_s": 19563
+  },
+  "temps": [
+    {
+      "label": "ACPI",
+      "current": 27.8,
+      "high": null,
+      "critical": null
+    },
+    {
+      "label": "ACPI",
+      "current": 29.8,
+      "high": null,
+      "critical": null
+    },
+    {
+      "label": "CPU Package",
+      "current": 37.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 0",
+      "current": 35.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 1",
+      "current": 35.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 2",
+      "current": 34.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 3",
+      "current": 35.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 4",
+      "current": 34.0,
+      "high": 82.0,
+      "critical": 100.0
+    },
+    {
+      "label": "Core 5",
+      "current": 35.0,
+      "high": 82.0,
+      "critical": 100.0
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "Copy to fleet.json. This file is WHICH MACHINES this deployment watches.",
+    "It holds no secrets — HOST_<ID>_TOKEN in the environment supplies those —",
+    "so a private deployment repo can commit it.",
+    "",
+    "kind picks the adapter: teg | agent | loq. Each one speaks to an API that",
+    "already exists on that machine."
+  ],
+  "intervalMs": 10000,
+  "historyLength": 90,
+  "hosts": [
+    {
+      "id": "disinteg",
+      "name": "disinteg",
+      "role": "Games, APIs and the NAS · Canada",
+      "kind": "teg",
+      "origin": "https://tegtech-api.ojee.net",
+      "links": [
+        { "label": "teg dashboard", "href": "https://teg.ojee.net" },
+        { "label": "storage", "href": "https://storage.ojee.net" }
+      ],
+      "enabled": true
+    },
+    {
+      "id": "hp",
+      "name": "ojee-hp-zorin",
+      "role": "Home lab · containers, n8n, CouchDB",
+      "kind": "agent",
+      "origin": "http://agentmod:8080",
+      "enabled": true
+    },
+    {
+      "id": "loq",
+      "name": "OJEE-LOQ-ZORIN",
+      "role": "Laptop · the machine I work on",
+      "kind": "loq",
+      "origin": "http://100.81.241.55:8300",
+      "enabled": true
+    }
+  ]
+}
