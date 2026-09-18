@@ -12,8 +12,10 @@
     "         no origin and no token, because there is nothing to dial",
     "",
     "mute lists alert kinds this host should never raise. See ALERT_KINDS in",
-    "src/normalize.js. Muting is per host on purpose: 95\u00b0C means nothing on a",
-    "laptop under load and means a failed fan on a server."
+    "laptop under load and means a failed fan on a server.",
+    "A gaming laptop runs its CPU and GPU hot under load by design, so loq",
+    "mutes both temperature rules and the throttle counter. The same numbers",
+    "on a server would mean a failed fan, which is why muting is per host."
   ],
   "intervalMs": 10000,
   "historyLength": 90,
@@ -52,7 +54,8 @@
       "enabled": true,
       "mute": [
         "cpu-temp",
-        "cpu-throttle"
+        "cpu-throttle",
+        "gpu-temp"
       ]
     }
   ]

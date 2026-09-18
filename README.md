@@ -103,8 +103,10 @@ A rule that fires forever is a rule you learn to ignore, and ignoring one alert 
 costs you the next one. So a host can name the kinds it should never raise:
 
 ```jsonc
-{ "id": "loq", "kind": "loq", "mute": ["cpu-temp", "cpu-throttle"] }
+{ "id": "loq", "kind": "loq", "mute": ["cpu-temp", "cpu-throttle", "gpu-temp"] }
 ```
+
+Temperature is two rules, not one — `cpu-temp` and `gpu-temp` — and muting the CPU one leaves the GPU one firing. A gaming laptop runs both hot by design, so it mutes both.
 
 `HOST_<ID>_MUTE` (a comma list) overrides it without editing config. The kinds are `ALERT_KINDS`
 in `src/normalize.js`.
