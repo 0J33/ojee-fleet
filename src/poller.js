@@ -20,7 +20,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { deriveAlerts, worst } from './normalize.js';
+import { applyMutes, deriveAlerts, worst } from './normalize.js';
 
 import * as tegAdapter from './adapters/teg.js';
 import * as agentAdapter from './adapters/agent.js';
@@ -129,13 +129,21 @@ export class Poller extends EventEmitter {
     if (Number.isFinite(prevThrottle) && Number.isFinite(nowThrottle) && nowThrottle > prevThrottle) {
       next.cpu = { ...next.cpu, throttlingNow: true, throttledDelta: nowThrottle - prevThrottle };
       next.alerts = [...(next.alerts || []), {
+        kind: 'cpu-throttle',
         severity: 'warn',
         text: `${next.name} CPU is throttling`,
         hint: `${nowThrottle - prevThrottle} events since the last sample`,
       }];
     }
 
-    next.alerts = [...(next.alerts || []), ...deriveAlerts(next)];
+    // Muting happens before the roll-up, not at render time: an alert this
+    // host was told not to raise must not colour it red, must not flip its
+    // status, and therefore must not reach Discord or a phone either.
+    next.alerts = applyMutes(
+      [...(next.alerts || []), ...deriveAlerts(next)],
+      host.mute,
+    );
+    next.muted = host.mute || [];
     next.status = next.online ? worst(next.alerts) : 'err';
 
     const before = prev?.status;

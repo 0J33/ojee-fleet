@@ -102,6 +102,49 @@ test('only transitions raise events', async () => {
   assert.deepEqual(seen, ['unknown->ok', 'ok->err']);
 });
 
+test('muting', async (t) => {
+  const hot = () => healthy({ cpu: { pct: 90, tempC: 96, throttled: 100 } });
+
+  await t.test('an unmuted host raises the rule', async () => {
+    const p = newPoller([hot()]);
+    await p.probeOne(HOST);
+    assert.ok(p.get('box').alerts.some((a) => a.kind === 'cpu-temp'));
+    assert.equal(p.get('box').status, 'warn');
+  });
+
+  await t.test('a muted kind is gone, and cannot colour the host', async () => {
+    const p = newPoller([hot()]);
+    await p.probeOne({ ...HOST, mute: ['cpu-temp'] });
+    const h = p.get('box');
+    assert.equal(h.alerts.some((a) => a.kind === 'cpu-temp'), false);
+    // The whole point: a muted rule must not flip the status either, or it
+    // still reaches Discord and the phone by another route.
+    assert.equal(h.status, 'ok');
+  });
+
+  await t.test('muting one kind leaves the others alone', async () => {
+    const p = newPoller([healthy({
+      cpu: { pct: 90, tempC: 96 },
+      disks: [{ label: '/', pct: 99 }],
+    })]);
+    await p.probeOne({ ...HOST, mute: ['cpu-temp'] });
+    const kinds = p.get('box').alerts.map((a) => a.kind);
+    assert.deepEqual(kinds, ['disk-critical']);
+    assert.equal(p.get('box').status, 'err');
+  });
+
+  await t.test('a muted throttle counter never becomes an alert', async () => {
+    const p = newPoller([
+      healthy({ cpu: { pct: 10, tempC: 40, throttled: 100 } }),
+      healthy({ cpu: { pct: 10, tempC: 40, throttled: 900 } }),
+    ]);
+    const muted = { ...HOST, mute: ['cpu-throttle'] };
+    await p.probeOne(muted);
+    await p.probeOne(muted);
+    assert.deepEqual(p.get('box').alerts, []);
+  });
+});
+
 test('the notifier', async (t) => {
   const sent = [];
   const mk = (over = {}) => new Notifier({

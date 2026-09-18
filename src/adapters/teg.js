@@ -74,17 +74,18 @@ export async function probe(host) {
     if (!h) continue;
     const verdict = String(h.status || h.smart || '').toUpperCase();
     if (verdict && verdict !== 'PASSED' && verdict !== 'OK') {
-      alerts.push({ severity: 'err', text: `${key}: SMART says ${h.status}`, hint: h.device || undefined });
+      alerts.push({ kind: 'smart', severity: 'err', text: `${key}: SMART says ${h.status}`, hint: h.device || undefined });
     }
     if (Number(h.reallocated) > 0) {
-      alerts.push({ severity: 'err', text: `${key} has ${h.reallocated} reallocated sectors` });
+      alerts.push({ kind: 'smart', severity: 'err', text: `${key} has ${h.reallocated} reallocated sectors` });
     }
     if (Number(h.fs_errors) > 0) {
-      alerts.push({ severity: 'warn', text: `${key} filesystem has logged ${h.fs_errors} errors` });
+      alerts.push({ kind: 'smart', severity: 'warn', text: `${key} filesystem has logged ${h.fs_errors} errors` });
     }
   }
   for (const f of checks?.failed || []) {
     alerts.push({
+      kind: 'unit-failed',
       severity: 'err',
       text: `${f.unit} failed`,
       hint: [f.scope === 'user' ? 'user unit' : null, f.detail].filter(Boolean).join(' · ') || undefined,

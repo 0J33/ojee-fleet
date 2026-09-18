@@ -52,6 +52,22 @@ something a person would actually do something about:
 
 **Logs** — the journal for a unit, on hosts whose API serves one.
 
+### Muting
+
+A rule that fires forever is a rule you learn to ignore, and ignoring one alert is a habit that
+costs you the next one. So a host can name the kinds it should never raise:
+
+```jsonc
+{ "id": "loq", "kind": "loq", "mute": ["cpu-temp", "cpu-throttle"] }
+```
+
+`HOST_<ID>_MUTE` (a comma list) overrides it without editing config. The kinds are `ALERT_KINDS`
+in `src/normalize.js`.
+
+Muting is **per host**, because 95 °C means nothing on a laptop compiling something and means a
+failed fan on a server. And it happens **before** the status roll-up, not at render time — a muted
+rule cannot colour the host red, so it cannot reach Discord or the phone by another route either.
+
 ---
 
 ## Things that took getting right

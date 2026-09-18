@@ -46,10 +46,16 @@ export function loadConfig() {
         throw new Error(`host id ${JSON.stringify(h.id)} is invalid — lowercase letters, digits and dashes`);
       }
       const key = ENV_KEY(h.id);
+      // A comma list in the environment overrides the file, so a noisy rule
+      // can be silenced on a running deployment without editing config.
+      const envMute = process.env[`HOST_${key}_MUTE`];
       return {
         ...h,
         origin: process.env[`HOST_${key}_ORIGIN`] || h.origin,
         token: process.env[`HOST_${key}_TOKEN`] || h.token || '',
+        mute: envMute != null
+          ? envMute.split(',').map((x) => x.trim()).filter(Boolean)
+          : (h.mute || []),
       };
     });
 
