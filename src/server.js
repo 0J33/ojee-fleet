@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ADAPTERS, Poller } from './poller.js';
 import { Notifier } from './notify.js';
+import { fmtUptime } from './normalize.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -90,15 +91,46 @@ app.get('/api/summary', (req, res) => {
       ? `${s.total} hosts · ${degraded.length} need attention`
       : `${s.total} hosts · all healthy`;
 
+  // Four facts, and each one has to be worth the space on a front page.
+  //
+  // This used to be one fact per host reading "4% cpu", which is the number
+  // most likely to be interesting on a graph and least likely to be worth
+  // knowing at a glance: it is 4% almost always, and when it is not, it is
+  // usually fine anyway. What you actually want to know before opening
+  // anything is whether everything is up, whether anything stopped, and
+  // whether something is about to run out of disk.
+  const services = s.hosts.flatMap((h) => h.services || []);
+  const running = services.filter((x) => x.ok).length;
+  const tightest = s.hosts
+    .flatMap((h) => (h.disks || []).map((d) => ({ ...d, host: h.name })))
+    .filter((d) => Number.isFinite(d.pct))
+    .sort((a, b) => b.pct - a.pct)[0];
+  const oldest = s.hosts
+    .filter((h) => h.online && Number.isFinite(h.uptime))
+    .sort((a, b) => b.uptime - a.uptime)[0];
+
+  const facts = [
+    {
+      k: 'Machines',
+      v: down.length ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down` : `${s.total} up`,
+    },
+    services.length
+      ? { k: 'Services', v: running === services.length ? `all ${services.length} running` : `${services.length - running} stopped of ${services.length}` }
+      : null,
+    tightest
+      ? { k: 'Fullest disk', v: `${tightest.host} ${tightest.label} · ${Math.round(tightest.pct)}%` }
+      : null,
+    s.alerts.length
+      ? { k: 'Needs attention', v: `${s.alerts.length} alert${s.alerts.length === 1 ? '' : 's'}` }
+      : oldest
+        ? { k: 'Longest up', v: `${oldest.name} · ${fmtUptime(oldest.uptime)}` }
+        : null,
+  ].filter(Boolean);
+
   res.json({
     status: s.status === 'unknown' ? 'warn' : s.status,
     headline,
-    facts: s.hosts.slice(0, 4).map((h) => ({
-      k: h.name,
-      v: !h.online ? 'offline'
-        : Number.isFinite(h.cpu?.pct) ? `${Math.round(h.cpu.pct)}% cpu`
-          : h.status,
-    })),
+    facts,
     alerts: s.alerts.slice(0, 5).map((a) => ({
       text: a.text, severity: a.severity, view: 'alerts',
     })),

@@ -8,24 +8,47 @@
    design system, not to whichever module loaded last.
    ============================================================ */
 
-/* ── status ──────────────────────────────────────────────────────────── */
+/* ── one surface language ─────────────────────────────────────────────────
+   Three treatments had crept in: cards on `.panel`, list rows painted on a
+   `var(--line)` grid to fake separators, and a few things on bare background.
+   They looked like three different apps. There is one rule now:
 
-.fl-dot {
-  display: inline-block; flex: none;
-  width: 8px; height: 8px;
-  background: var(--dim);
-}
-.fl-dot.is-ok   { background: var(--ok, var(--accent)); box-shadow: 0 0 8px var(--glow-soft); }
-.fl-dot.is-warn { background: var(--warn); box-shadow: 0 0 8px rgba(255, 176, 32, 0.5); }
-.fl-dot.is-err  { background: var(--err); box-shadow: 0 0 8px rgba(255, 68, 68, 0.5); }
+     a CONTAINER is `.panel`         (the design system's surface)
+     a ROW is `.fl-row`              (transparent, separated by a hairline)
+     a STATUS is `.dot`              (the design system's, not a second one)
+
+   Nothing inside a panel paints its own background, so nesting never stacks
+   two surfaces, and a row highlight means something because it is the only
+   background in play. */
 
 .fl-verdict {
   display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap;
   padding: var(--s-3);
-  background: var(--bg-1); border: 1px solid var(--line);
+  background: var(--panel); border: 1px solid var(--line-2);
 }
 .fl-verdict strong { font-family: var(--mono); font-size: 0.82rem; color: var(--ink); }
 .fl-live { margin-left: auto; }
+
+/* The shared row. Everything that is a list of things uses it: alerts,
+   services, drives, processes. */
+.fl-row {
+  display: grid; align-items: center; gap: var(--s-2);
+  width: 100%; padding: 9px 0; min-height: 38px;
+  background: none; border: 0; border-bottom: 1px solid var(--line-2);
+  text-align: left; color: var(--ink-2);
+  font-family: var(--mono); font-size: 0.72rem;
+}
+.fl-row:last-child { border-bottom: 0; }
+button.fl-row { cursor: pointer; }
+button.fl-row:hover, button.fl-row:focus-visible { color: var(--ink); outline: none; }
+button.fl-row:hover .fl-row-name { color: var(--accent); }
+.fl-row-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A row that is reporting a problem earns a tint — the only one on the page,
+   which is what makes it read as a state rather than as decoration. */
+.fl-row.is-bad { background: var(--err-wash); box-shadow: inset 2px 0 0 var(--err); padding-inline: var(--s-2); }
+.fl-row.is-warn { box-shadow: inset 2px 0 0 var(--warn); padding-inline: var(--s-2); }
 
 /* ── host cards ──────────────────────────────────────────────────────── */
 
@@ -33,7 +56,7 @@
   display: grid; gap: var(--s-3);
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
 }
-.fl-card { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-3); }
+.fl-card { display: flex; flex-direction: column; gap: var(--s-3); }
 .fl-card.is-off { border-color: var(--err); }
 .fl-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .fl-card-name {
@@ -46,29 +69,49 @@
   margin-left: auto; flex: none;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 46%;
 }
-.fl-card-body { display: grid; gap: var(--s-2); }
+.fl-card-body { display: grid; gap: var(--s-3); }
 .fl-card-off { display: grid; gap: 4px; padding: var(--s-2) 0; }
 .fl-card-off strong { color: var(--err); font-family: var(--mono); font-size: 0.76rem; }
 .fl-card-foot {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
-  padding-top: var(--s-2); border-top: 1px solid var(--line);
+  padding-top: var(--s-2); border-top: 1px solid var(--line-2);
 }
 
-.fl-metric { display: grid; gap: 5px; }
+.fl-metric { display: grid; gap: 6px; }
 .fl-metric-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); }
 .fl-metric-val { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2); }
-.fl-metric--absent { opacity: 0.55; }
+.fl-metric--absent { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); opacity: 0.55; }
 
 /* ── charts ──────────────────────────────────────────────────────────── */
 
 .fl-charts { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .fl-chart { display: grid; gap: 6px; }
+.fl-sparkwrap { position: relative; height: 34px; }
 .fl-spark {
-  width: 100%; height: 34px; display: block;
-  background: var(--bg-0); border: 1px solid var(--line);
+  width: 100%; height: 100%; display: block;
+  background: var(--bg-0); border: 1px solid var(--line-2);
 }
 .fl-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.4; vector-effect: non-scaling-stroke; }
-.fl-spark--empty { height: 34px; background: var(--bg-0); border: 1px dashed var(--line); }
+.fl-spark--empty { height: 34px; background: var(--bg-0); border: 1px dashed var(--line-2); }
+
+/* The readout only exists while a pointer is over the graph, so it costs the
+   resting page nothing. */
+.fl-spark-cursor {
+  position: absolute; top: 0; bottom: 0; width: 1px;
+  background: var(--accent); opacity: 0; pointer-events: none;
+}
+.fl-spark-tip {
+  position: absolute; bottom: calc(100% + 4px);
+  transform: translateX(-50%);
+  padding: 3px 7px; white-space: nowrap;
+  background: var(--chrome-3, var(--bg-2)); border: 1px solid var(--line-strong);
+  color: var(--ink); font-family: var(--mono); font-size: 0.62rem;
+  opacity: 0; pointer-events: none; z-index: 2;
+}
+.fl-spark-tip[data-side="right"] { transform: translateX(0); }
+.fl-spark-tip[data-side="left"]  { transform: translateX(-100%); }
+.fl-sparkwrap.is-hot .fl-spark-cursor,
+.fl-sparkwrap.is-hot .fl-spark-tip { opacity: 1; }
 
 /* ── host picker ─────────────────────────────────────────────────────── */
 
@@ -82,10 +125,14 @@
 .fl-pick:hover { border-color: var(--line-hover); color: var(--ink); }
 .fl-pick.is-on { border-color: var(--accent); color: var(--accent); background: var(--accent-08); }
 
+/* A toggled button, for the log unit strip. The system has no chip, and a
+   `chip` class that matched nothing is why those rendered unstyled. */
+.fl-on { border-color: var(--accent); color: var(--accent); background: var(--accent-08); }
+
 /* ── facts ───────────────────────────────────────────────────────────── */
 
 .fl-facts {
-  display: grid; gap: var(--s-2) var(--s-3); margin: 0;
+  display: grid; gap: var(--s-3); margin: 0;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 .fl-facts div { min-width: 0; }
@@ -101,67 +148,33 @@
 .fl-two { display: grid; gap: var(--s-3); grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
 .fl-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
 .fl-toolbar { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.fl-list { display: grid; }
 
-/* ── alerts ──────────────────────────────────────────────────────────── */
+/* ── per-list column shapes (the rows themselves are .fl-row) ─────────── */
 
-.fl-alerts { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
-.fl-alert {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 10px var(--s-3); min-height: 40px;
-  background: var(--bg-1); border: 0; cursor: pointer; text-align: left;
-  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
-}
-.fl-alert:hover { background: var(--accent-03); color: var(--ink); }
+.fl-alert { grid-template-columns: 8px minmax(0, 1fr) auto; }
 .fl-alert.is-err .fl-alert-text { color: var(--err); }
 .fl-alert.is-warn .fl-alert-text { color: var(--warn); }
-.fl-alert-text { flex: 1 1 auto; min-width: 0; }
-.fl-alert-hint { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-alert-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-alert-hint { max-width: 40%; }
 
-/* ── services ────────────────────────────────────────────────────────── */
-
-.fl-svcs { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
-.fl-svc {
-  display: grid; align-items: center; gap: var(--s-2);
-  grid-template-columns: 8px minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 1fr) auto;
-  padding: 8px var(--s-3); min-height: 40px;
-  background: var(--bg-1);
-  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
-}
-.fl-svc.is-down { background: var(--err-wash); }
-.fl-svc-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fl-svc-host, .fl-svc-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.fl-drives { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); }
-.fl-drive {
-  display: grid; align-items: center; gap: var(--s-2);
-  grid-template-columns: minmax(0, 0.6fr) minmax(0, 1.4fr) auto auto;
-  padding: 8px var(--s-3); background: var(--bg-1);
-  font-family: var(--mono); font-size: 0.72rem; color: var(--ink-2);
-}
-.fl-drive-dev { color: var(--ink); }
-.fl-drive-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.fl-procs { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); max-height: 44vh; overflow-y: auto; }
-.fl-proc {
-  display: grid; align-items: center; gap: var(--s-2);
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.6fr) 62px 84px;
-  padding: 7px var(--s-3); background: var(--bg-1);
-  font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2);
-}
+.fl-svc { grid-template-columns: 8px minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 1fr) auto; }
+.fl-drive { grid-template-columns: minmax(0, 0.6fr) minmax(0, 1.4fr) auto auto; }
+.fl-proc { grid-template-columns: minmax(0, 1.6fr) minmax(0, 0.6fr) 62px 84px; }
 .fl-proc--head {
   position: sticky; top: 0; z-index: 1;
-  background: var(--bg-2); color: var(--dim);
+  background: var(--panel); color: var(--dim); min-height: 28px; padding-block: 5px;
   font-family: var(--hud); font-size: 0.54rem; letter-spacing: 0.14em; text-transform: uppercase;
 }
-.fl-proc-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-procs { max-height: 44vh; overflow-y: auto; }
 .fl-proc-search { max-width: 220px; }
 
 /* ── logs ────────────────────────────────────────────────────────────── */
 
-.fl-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.fl-chips { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .fl-log {
   margin: 0; padding: var(--s-3);
-  background: var(--bg-0); border: 1px solid var(--line);
+  background: var(--bg-0); border: 1px solid var(--line-2);
   font-family: var(--mono); font-size: 0.66rem; line-height: 1.5; color: var(--ink-2);
   max-height: 46vh; overflow: auto; white-space: pre;
 }
@@ -177,6 +190,11 @@
      detail go; the name, the state and the action are what you came for. */
   .fl-svc { grid-template-columns: 8px minmax(0, 1fr) auto; }
   .fl-svc-host, .fl-svc-detail { display: none; }
+  .fl-alert { grid-template-columns: 8px minmax(0, 1fr); }
   .fl-alert-hint { display: none; }
+  .fl-proc { grid-template-columns: minmax(0, 1fr) 56px 72px; }
+  .fl-proc > :nth-child(2) { display: none; }
+  .fl-drive { grid-template-columns: minmax(0, 1fr) auto; }
+  .fl-drive > :nth-child(2), .fl-drive > :nth-child(4) { display: none; }
   .fl-facts { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
 }

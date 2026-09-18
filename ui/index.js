@@ -84,17 +84,30 @@ const api = async (path, opts = {}) => ctx.api(path.replace(/^\/api/, ''), opts)
 
 /* ── small pieces ────────────────────────────────────────────────────── */
 
-const dot = (status) => el('span', { class: `fl-dot is-${status}`, title: status });
+/* The design system's own dot, not one of ours. It already has ok/warn/err
+   and the pulse on err; a second implementation next to it is how two things
+   that mean the same thing end up looking different. */
+const dot = (status) => el('span', {
+  class: `dot dot--${status === 'err' ? 'err' : status === 'warn' ? 'warn' : 'ok'}`,
+  title: status,
+});
 
+/**
+ * A labelled meter.
+ *
+ * The fill is `.bar .fill`, which is what the design system styles — this
+ * shipped as `.bar-fill`, matched nothing, and every bar on the page rendered
+ * as an empty track. Severity is a modifier ON THE FILL for the same reason.
+ */
 const bar = (value, label, opts = {}) => {
   const p = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
-  const tone = p == null ? '' : p >= (opts.crit ?? 90) ? ' is-err' : p >= (opts.warn ?? 75) ? ' is-warn' : '';
+  const tone = p == null ? '' : p >= (opts.crit ?? 90) ? ' fill--err' : p >= (opts.warn ?? 75) ? ' fill--warn' : '';
   return el('div', { class: 'fl-metric' },
     el('div', { class: 'fl-metric-top' },
       el('span', { class: 'label' }, label),
       el('span', { class: 'fl-metric-val tnum' }, opts.text || fmtPct(p))),
-    el('div', { class: `bar${tone}` },
-      el('span', { class: 'bar-fill', style: `width:${p == null ? 0 : p}%` })));
+    el('div', { class: 'bar' },
+      el('span', { class: `fill${tone}`, style: `width:${p == null ? 0 : p}%` })));
 };
 
 /**
@@ -102,7 +115,7 @@ const bar = (value, label, opts = {}) => {
  * being drawn as zero — a gap is what a missing sample actually is, and a
  * dive to the floor is what a reader would otherwise see.
  */
-const spark = (samples, key, { height = 28, max = 100 } = {}) => {
+const spark = (samples, key, { height = 28, max = 100, unit = '%' } = {}) => {
   const pts = samples.map((s, i) => [i, s[key]]);
   const w = Math.max(1, samples.length - 1);
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -123,11 +136,41 @@ const spark = (samples, key, { height = 28, max = 100 } = {}) => {
   }
   flush();
   if (!svg.childNodes.length) return el('div', { class: 'fl-spark fl-spark--empty' });
-  return svg;
+
+  // A graph you cannot interrogate is a shape, not a reading. The pointer
+  // picks the nearest sample and says what it was and when — no library,
+  // because it is one index lookup.
+  const wrap = el('div', { class: 'fl-sparkwrap' });
+  const cursor = el('span', { class: 'fl-spark-cursor' });
+  const tip = el('span', { class: 'fl-spark-tip' });
+  wrap.append(svg, cursor, tip);
+
+  const show = (ev) => {
+    const box = wrap.getBoundingClientRect();
+    if (!box.width || samples.length < 2) return;
+    const ratio = Math.max(0, Math.min(1, (ev.clientX - box.left) / box.width));
+    const i = Math.round(ratio * (samples.length - 1));
+    const sample = samples[i];
+    const v = sample?.[key];
+    cursor.style.left = `${(i / (samples.length - 1)) * 100}%`;
+    const when = Number.isFinite(sample?.t)
+      ? new Date(sample.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : '';
+    tip.textContent = `${Number.isFinite(v) ? `${Math.round(v)}${unit}` : 'no sample'}${when ? ` · ${when}` : ''}`;
+    // Keep the label inside the box at both ends rather than letting it hang
+    // off the panel.
+    tip.style.left = `${Math.max(0, Math.min(100, (i / (samples.length - 1)) * 100))}%`;
+    tip.dataset.side = ratio > 0.66 ? 'left' : ratio < 0.33 ? 'right' : 'centre';
+    wrap.classList.add('is-hot');
+  };
+  wrap.addEventListener('pointermove', show);
+  wrap.addEventListener('pointerdown', show);
+  wrap.addEventListener('pointerleave', () => wrap.classList.remove('is-hot'));
+  return wrap;
 };
 
 const alertRow = (a, onOpen) => el('button', {
-  class: `fl-alert is-${a.severity}`,
+  class: `fl-row fl-alert is-${a.severity}`,
   type: 'button',
   onclick: () => onOpen?.(a),
 },
@@ -197,7 +240,7 @@ function viewOverview(d) {
   if (d.alerts.length) {
     wrap.append(el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'What is wrong'),
-      el('div', { class: 'fl-alerts' },
+      el('div', { class: 'fl-list' },
         d.alerts.map((a) => alertRow(a, () => { state.selected = a.host; go('hosts'); })))));
   }
   return wrap;
@@ -241,7 +284,7 @@ function viewHosts(d) {
             el('span', { class: 'label' }, label),
             el('span', { class: 'fl-metric-val tnum' },
               key === 'temp' ? fmtTemp(now) : fmtPct(now))),
-          spark(samples, key, { max: key === 'temp' ? 100 : 100 })))));
+          spark(samples, key, { max: 100, unit: key === 'temp' ? '°C' : '%' })))));
 
   const disks = el('section', { class: 'panel stack' },
     el('h3', { class: 'h3' }, (current.disks || []).length ? 'Filesystems' : 'Drives'),
@@ -252,7 +295,7 @@ function viewHosts(d) {
       // Some hosts report the physical drives and no usage at all. Say what
       // they are rather than drawing usage bars that could only sit at zero.
       : (current.drives || []).length
-        ? el('div', { class: 'fl-drives' }, current.drives.map((dv) => el('div', { class: 'fl-drive' },
+        ? el('div', { class: 'fl-list' }, current.drives.map((dv) => el('div', { class: 'fl-row fl-drive' },
           el('span', { class: 'fl-drive-dev' }, dv.device),
           el('span', { class: 'fl-drive-model meta', title: dv.model || '' }, dv.model || 'unknown'),
           el('span', { class: 'fl-drive-size tnum' }, fmtBytes(dv.size)),
@@ -278,7 +321,7 @@ function viewHosts(d) {
   const gpuList = (!current.gpu && (current.gpus || []).length)
     ? el('section', { class: 'panel stack' },
       el('h3', { class: 'h3' }, 'Graphics'),
-      el('div', { class: 'fl-drives' }, current.gpus.map((g) => el('div', { class: 'fl-drive' },
+      el('div', { class: 'fl-list' }, current.gpus.map((g) => el('div', { class: 'fl-row fl-drive' },
         el('span', { class: 'fl-drive-dev' }, g.inUse ? 'in use' : 'idle'),
         el('span', { class: 'fl-drive-model meta', title: g.model }, g.model),
         el('span', { class: 'meta' }, g.driver || ''),
@@ -327,7 +370,7 @@ function viewLogs(host) {
     el('h3', { class: 'h3' }, 'Logs'),
     el('div', { class: 'fl-chips' },
       units.map((u) => el('button', {
-        class: `chip ${state.logUnit === u ? 'is-on' : ''}`,
+        class: `btn btn--ghost btn--sm ${state.logUnit === u ? 'fl-on' : ''}`,
         type: 'button',
         onclick: () => loadLog(host.id, u),
       }, u))),
@@ -359,11 +402,11 @@ function viewProcesses(host) {
         },
       })),
     rows.length
-      ? el('div', { class: 'fl-procs' },
-        el('div', { class: 'fl-proc fl-proc--head' },
+      ? el('div', { class: 'fl-list fl-procs' },
+        el('div', { class: 'fl-row fl-proc fl-proc--head' },
           el('span', {}, 'Process'), el('span', {}, 'User'),
           el('span', { class: 'tnum' }, 'CPU'), el('span', { class: 'tnum' }, 'Memory')),
-        rows.map((pr) => el('div', { class: 'fl-proc' },
+        rows.map((pr) => el('div', { class: 'fl-row fl-proc' },
           el('span', { class: 'fl-proc-name', title: pr.cmdline || pr.name }, pr.name),
           el('span', { class: 'meta' }, pr.user || '—'),
           el('span', { class: 'tnum' }, `${(pr.cpuPct ?? 0).toFixed(1)}%`),
@@ -388,8 +431,8 @@ function servicesPanel(hosts) {
       el('h3', { class: 'h3' }, 'Services'),
       el('span', { class: 'meta' },
         `${rows.filter((r) => r.ok).length} of ${rows.length} running`)),
-    el('div', { class: 'fl-svcs' }, rows.map((s) => el('div', {
-      class: `fl-svc ${s.ok ? '' : 'is-down'}`,
+    el('div', { class: 'fl-list' }, rows.map((s) => el('div', {
+      class: `fl-row fl-svc ${s.ok ? '' : 'is-bad'}`,
     },
     dot(s.ok ? 'ok' : 'err'),
     el('span', { class: 'fl-svc-name' }, s.name),
@@ -441,7 +484,7 @@ function viewAlerts(d) {
             type: 'button',
             onclick: () => { state.selected = id; go('hosts'); },
           }, 'Open')),
-        el('div', { class: 'fl-alerts' }, list.map((a) => alertRow(a))));
+        el('div', { class: 'fl-list' }, list.map((a) => alertRow(a))));
     }));
 }
 
