@@ -79,6 +79,24 @@ So a host has a **grace window** — five minutes by default, `downGraceMs` in t
 
 Past the window it becomes an ordinary unreachable host, announced exactly once.
 
+### What counts as a service
+
+Not every container the daemon knows about. Three kinds are not services and were all being
+reported as stopped ones:
+
+- **`8f3a91bc2d04_thing`** — Docker renames a container it is replacing and leaves it behind until
+  the new one is up. Redeploying this module therefore produced an alert *about this module*, in
+  state `Created`, under a name nobody has ever typed.
+- **`Created` but never started** — the same recreate, caught mid-flight.
+- **a one-shot job that ran and exited** — a job that finished is not a service that died.
+
+What remains is: it is running, or it is stopped and its restart policy says it should not be.
+That last check costs one inspect per non-running container, which is normally zero.
+
+A service also has to be missed **twice in a row** before it is an alert. Restarting a container
+takes a few seconds and the poll is every ten, so a single miss is usually a restart in progress —
+including one you started a moment ago.
+
 ### Muting
 
 A rule that fires forever is a rule you learn to ignore, and ignoring one alert is a habit that

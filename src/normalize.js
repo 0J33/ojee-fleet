@@ -122,7 +122,10 @@ export function deriveAlerts(h) {
   }
 
   for (const s of h.services || []) {
-    if (s.ok === false) {
+    // `downFor` is filled in by the poller, which is the only thing that can
+    // see two samples. An adapter that does not report it gets the old
+    // behaviour: alert on the first miss.
+    if (s.ok === false && (s.downFor ?? 2) >= 2) {
       add('service-down', s.critical ? 'err' : 'warn',
         `${s.name} is not running on ${h.name}`, s.detail || undefined);
     }

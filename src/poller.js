@@ -106,6 +106,18 @@ export class Poller extends EventEmitter {
       }
     }
 
+    // How many polls in a row each service has been down. Restarting a
+    // container takes a few seconds and we look every ten, so a service seen
+    // down exactly once is usually a service being restarted — including by
+    // me, one command earlier. Two consecutive misses is the difference
+    // between "it is bouncing" and "it is gone".
+    if (Array.isArray(next.services) && next.services.length) {
+      const before = new Map((prev?.services || []).map((x) => [x.id, x]));
+      next.services = next.services.map((svc) => (svc.ok === false
+        ? { ...svc, downFor: (before.get(svc.id)?.downFor || 0) + 1 }
+        : { ...svc, downFor: 0 }));
+    }
+
     // Always present, whichever way the probe went: the API and the UI should
     // not have to ask whether a field exists before reading it.
     next.graceMs = Number.isFinite(host.graceMs) ? host.graceMs : 0;

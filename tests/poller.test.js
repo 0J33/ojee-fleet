@@ -188,6 +188,40 @@ test('a brief disconnect is not an outage', async (t) => {
   });
 });
 
+test('a service seen down once is a service being restarted', async (t) => {
+  const withSvc = (ok) => healthy({ services: [{ id: 'n8n', name: 'n8n', ok }] });
+
+  await t.test('one miss says nothing', async () => {
+    const p = newPoller([withSvc(true), withSvc(false)]);
+    await p.probeOne(HOST);
+    await p.probeOne(HOST);
+    const h = p.get('box');
+    assert.equal(h.services[0].downFor, 1);
+    assert.deepEqual(h.alerts, []);
+    assert.equal(h.status, 'ok');
+  });
+
+  await t.test('two in a row is an alert', async () => {
+    const p = newPoller([withSvc(true), withSvc(false), withSvc(false)]);
+    await p.probeOne(HOST);
+    await p.probeOne(HOST);
+    await p.probeOne(HOST);
+    const h = p.get('box');
+    assert.equal(h.services[0].downFor, 2);
+    assert.equal(h.alerts[0].kind, 'service-down');
+  });
+
+  await t.test('coming back resets the count', async () => {
+    const p = newPoller([withSvc(true), withSvc(false), withSvc(true)]);
+    await p.probeOne(HOST);
+    await p.probeOne(HOST);
+    await p.probeOne(HOST);
+    const h = p.get('box');
+    assert.equal(h.services[0].downFor, 0);
+    assert.deepEqual(h.alerts, []);
+  });
+});
+
 test('muting', async (t) => {
   const hot = () => healthy({ cpu: { pct: 90, tempC: 96, throttled: 100 } });
 

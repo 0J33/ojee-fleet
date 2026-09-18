@@ -214,20 +214,66 @@ function docker(pathname, { method = 'GET', timeout = 5000 } = {}) {
   });
 }
 
+/**
+ * Containers that are SERVICES, which is not the same as every container the
+ * daemon knows about.
+ *
+ * Three kinds of container are not services and were all being reported as
+ * stopped ones:
+ *
+ *   - `8f3a91bc2d04_thing` — Docker renames a container it is replacing and
+ *     leaves it behind until the new one is up. Redeploying this module
+ *     therefore produced an alert about this module, in state `Created`,
+ *     under a name nobody has ever typed.
+ *   - `Created` but never started — the same recreate, caught mid-flight.
+ *   - a one-shot job that ran and exited, which is a job that finished.
+ *
+ * What remains is: it is running, or it is stopped and its restart policy says
+ * it should not be. That last check costs one inspect per NON-running
+ * container, which is normally zero.
+ */
+const RENAMED = /^[0-9a-f]{8,}_/;          // docker's replace-in-progress prefix
+const KEEP_RUNNING = new Set(['always', 'unless-stopped']);
+
 async function containers() {
   try {
     const list = await docker('/v1.43/containers/json?all=1');
-    return (list || []).map((c) => ({
-      id: (c.Names?.[0] || c.Id || '').replace(/^\//, ''),
-      name: (c.Names?.[0] || c.Id || '').replace(/^\//, ''),
-      ok: c.State === 'running',
-      detail: c.Status || null,
-      kind: 'container',
-      image: c.Image || null,
-      // A container that exists and is stopped is a service that is down. An
-      // exited one-shot job is not, so those are reported without judgement.
-      critical: false,
-    })).sort((a, b) => a.name.localeCompare(b.name));
+    const out = [];
+    for (const c of list || []) {
+      const name = (c.Names?.[0] || c.Id || '').replace(/^\//, '');
+      if (!name || RENAMED.test(name)) continue;
+      if (c.Labels?.['com.docker.compose.oneoff'] === 'True') continue;
+      if (c.State === 'created') continue;
+
+      const running = c.State === 'running';
+      if (!running) {
+        // `restarting` is a container trying, not a container that gave up.
+        if (c.State === 'restarting') {
+          out.push({
+            id: name, name, ok: true, detail: c.Status || 'restarting',
+            kind: 'container', image: c.Image || null, critical: false,
+          });
+          continue;
+        }
+        let policy = '';
+        try {
+          const info = await docker(`/v1.43/containers/${encodeURIComponent(c.Id)}/json`);
+          policy = info?.HostConfig?.RestartPolicy?.Name || '';
+        } catch { policy = ''; }
+        // Exited with no policy to bring it back: that is a job, not a service.
+        if (!KEEP_RUNNING.has(policy)) continue;
+      }
+      out.push({
+        id: name,
+        name,
+        ok: running,
+        detail: c.Status || null,
+        kind: 'container',
+        image: c.Image || null,
+        critical: false,
+      });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   } catch {
     return [];
   }
