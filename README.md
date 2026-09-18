@@ -54,6 +54,10 @@ something a person would actually do something about:
 | no sample for 2 minutes | the reading on screen is not live |
 | SMART not `PASSED`, reallocated sectors | the most important thing on the page |
 
+**Processes** — the top of `ps`, filterable, on hosts whose API lists them. This is what the
+laptop's own console module was for; a machine does not stop being a machine because it happens to
+be the one you are sitting at, so it is a device in here like the others.
+
 **Logs** — the journal for a unit, on hosts whose API serves one.
 
 ### Muting
@@ -165,6 +169,7 @@ Mounted in a console, add it to `config/console.json` like any other module.
 | `GET /api/summary` | status, headline, facts, alerts — the console's front page |
 | `GET /api/hosts` | every host, normalized, plus the rolled-up alert list |
 | `GET /api/hosts/:id` | one host, with its history ring |
+| `GET /api/hosts/:id/processes` | top processes, proxied, for hosts that list them |
 | `GET /api/hosts/:id/logs/:unit` | journal, proxied, for hosts that serve one |
 | `POST /api/hosts/:id/action` | `{action}` — forwarded to the host |
 | `GET /api/events` | SSE: `state` on every poll, `notify` on a transition |

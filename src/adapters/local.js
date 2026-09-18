@@ -12,10 +12,11 @@
  *   - `/proc/stat`, `/proc/meminfo`, `/proc/uptime` and `/proc/loadavg` inside
  *     a container already describe the HOST, not the container. No mount is
  *     needed for CPU, memory or uptime.
- *   - Filesystems are the exception: the container's mount table is its own.
- *     Real mounts come from `${HOST_ROOT}/proc/mounts`, with usage read
- *     through the same prefix, so this works mounted at /host or bare on a
- *     machine with no container at all.
+ *   - Filesystems come from our OWN mount table, because bind-mounting `/` is
+ *     recursive and every host filesystem therefore appears in it as
+ *     `/host/home` and so on. Reading the host's own `/proc/mounts` through
+ *     the bind does NOT work: it is a symlink to `/proc/self/mounts`, which
+ *     resolves in the reader's namespace and hands back the container's table.
  */
 
 import fs from 'node:fs';
@@ -30,7 +31,7 @@ import { num, offlineHost, pct } from '../normalize.js';
 const execFileP = promisify(execFile);
 
 /** Where the host's filesystem is visible from in here. '' means "we are it". */
-const HOST_ROOT = process.env.HOST_ROOT ?? (fs.existsSync('/host/proc/mounts') ? '/host' : '');
+const HOST_ROOT = (process.env.HOST_ROOT ?? (fs.existsSync('/host/etc/os-release') ? '/host' : '')).replace(/\/$/, '');
 const DOCKER_SOCK = process.env.DOCKER_SOCK || '/var/run/docker.sock';
 
 /* CPU and network percentages are deltas, so the previous sample has to live
@@ -82,28 +83,48 @@ const SKIP_FS = new Set([
   'nsfs', 'overlay', 'efivarfs', 'rpc_pipefs',
 ]);
 
+/**
+ * The host's filesystems, read from THIS process's mount table.
+ *
+ * Not from `${HOST_ROOT}/proc/mounts`, which looks like the obvious source and
+ * is not one: `/proc/mounts` is a symlink to `/proc/self/mounts`, so it
+ * resolves in the reader's own mount namespace no matter whose procfs it is
+ * bound from. Reading the host's /proc through a bind mount returns the
+ * container's mount table.
+ *
+ * Bind-mounting `/` is recursive, though, so every real filesystem on the host
+ * turns up in our OWN table as `/host/home`, `/host/boot/efi` and so on. That
+ * is the list, and it needs no extra mount to get at. With HOST_ROOT unset —
+ * running on the machine itself — the same code reads the same table with no
+ * prefix to strip.
+ */
 async function filesystems() {
-  const text = await readOr(`${HOST_ROOT}/proc/mounts`, '');
+  const text = await readOr('/proc/mounts', '');
   const seen = new Map();
   for (const line of text.split('\n')) {
     const [device, mountRaw, fstype] = line.split(' ');
     if (!mountRaw || SKIP_FS.has(fstype)) continue;
     if (!device?.startsWith('/dev/') && !fstype?.startsWith('fuse')) continue;
     // Mount points are octal-escaped in /proc/mounts (a space is \040).
-    const mount = mountRaw.replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+    const full = mountRaw.replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
+    // Inside a container only what is under HOST_ROOT describes the host; the
+    // rest is the container's own plumbing and its bind-mounted config.
+    if (HOST_ROOT && !(full === HOST_ROOT || full.startsWith(`${HOST_ROOT}/`))) continue;
+    const mount = HOST_ROOT ? (full.slice(HOST_ROOT.length) || '/') : full;
     if (mount.startsWith('/snap') || mount.startsWith('/var/snap')) continue;
+    if (mount.startsWith('/var/lib/docker') || mount.startsWith('/var/lib/containerd')) continue;
     // One device, many mount points: keep the shortest path, which is the one
     // a person would name. Same reasoning as the teg adapter.
     const key = device;
     if (!seen.has(key) || mount.length < seen.get(key).mount.length) {
-      seen.set(key, { device, mount, fstype });
+      seen.set(key, { device, mount, full, fstype });
     }
   }
 
   const out = [];
   for (const entry of seen.values()) {
     try {
-      const s = fs.statfsSync(path.join(HOST_ROOT, entry.mount));
+      const s = fs.statfsSync(entry.full);
       const total = s.blocks * s.bsize;
       if (!total) continue;
       const free = s.bavail * s.bsize;

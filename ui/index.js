@@ -72,6 +72,9 @@ const state = {
   logUnit: null,
   logText: '',
   logBusy: false,
+  procs: null,
+  procsFor: null,
+  procQuery: '',
   busyAction: null,
   filter: '',
   live: false,
@@ -212,7 +215,11 @@ function viewHosts(d) {
     d.hosts.map((h) => el('button', {
       class: `fl-pick ${h.id === current.id ? 'is-on' : ''}`,
       type: 'button',
-      onclick: () => { state.selected = h.id; state.detail = null; state.logUnit = null; loadDetail(); render(); },
+      onclick: () => {
+        state.selected = h.id; state.detail = null; state.logUnit = null;
+        state.procs = null; state.procsFor = null; state.procQuery = '';
+        loadDetail(); render();
+      },
     }, dot(h.status || (h.online ? 'ok' : 'err')), h.name)));
 
   const facts = el('dl', { class: 'fl-facts' },
@@ -296,6 +303,7 @@ function viewHosts(d) {
   }
 
   const logs = current.capabilities?.logs ? viewLogs(current) : null;
+  const procs = current.capabilities?.processes ? viewProcesses(current) : null;
 
   return el('section', { class: 'stack-lg' },
     picker,
@@ -309,6 +317,7 @@ function viewHosts(d) {
     el('div', { class: 'fl-two' }, disks, gpu || gpuList || extras.shift() || el('div')),
     extras.length ? el('div', { class: 'fl-two' }, extras) : null,
     servicesPanel([current]),
+    procs,
     logs);
 }
 
@@ -328,6 +337,38 @@ function viewLogs(host) {
         [92, 74, 86, 61, 80].map((w) => el('span', { class: 'skeleton fl-log-skel', style: `width:${w}%` })))
       : el('pre', { class: 'fl-log' },
         state.logText || 'Pick a unit to read its journal.'));
+}
+
+function viewProcesses(host) {
+  if (state.procsFor !== host.id && state.procs === null) loadProcs(host.id);
+  const rows = state.procsFor === host.id ? (state.procs || []) : [];
+  return el('section', { class: 'panel stack' },
+    el('div', { class: 'fl-panel-head' },
+      el('h3', { class: 'h3' }, 'Processes'),
+      el('input', {
+        class: 'input fl-proc-search',
+        type: 'search',
+        placeholder: 'Filter',
+        value: state.procQuery,
+        oninput: (e) => {
+          state.procQuery = e.target.value;
+          clearTimeout(viewProcesses.t);
+          // Typing should not fire a request per keystroke at a machine that
+          // has to walk /proc to answer it.
+          viewProcesses.t = setTimeout(() => loadProcs(host.id), 250);
+        },
+      })),
+    rows.length
+      ? el('div', { class: 'fl-procs' },
+        el('div', { class: 'fl-proc fl-proc--head' },
+          el('span', {}, 'Process'), el('span', {}, 'User'),
+          el('span', { class: 'tnum' }, 'CPU'), el('span', { class: 'tnum' }, 'Memory')),
+        rows.map((pr) => el('div', { class: 'fl-proc' },
+          el('span', { class: 'fl-proc-name', title: pr.cmdline || pr.name }, pr.name),
+          el('span', { class: 'meta' }, pr.user || '—'),
+          el('span', { class: 'tnum' }, `${(pr.cpuPct ?? 0).toFixed(1)}%`),
+          el('span', { class: 'tnum' }, fmtBytes((pr.memKb || 0) * 1024)))))
+      : el('p', { class: 'meta' }, state.procsFor === host.id ? 'Nothing matches that.' : 'Reading…'));
 }
 
 function servicesPanel(hosts) {
@@ -438,6 +479,16 @@ async function loadLog(hostId, unit) {
     state.logBusy = false;
     render();
   }
+}
+
+async function loadProcs(hostId) {
+  try {
+    const d = await api(`/api/hosts/${hostId}/processes?limit=30`
+      + (state.procQuery ? `&q=${encodeURIComponent(state.procQuery)}` : ''));
+    state.procs = d?.processes || [];
+    state.procsFor = hostId;
+  } catch { state.procs = []; state.procsFor = hostId; }
+  render();
 }
 
 async function loadDetail() {

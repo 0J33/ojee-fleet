@@ -57,6 +57,10 @@ app.get('/module.json', (req, res) => {
     id: process.env.MODULE_ID || 'fleet',
     name: process.env.MODULE_NAME || 'Fleet',
     version: '1.0.0',
+    // The shell draws this in the sidebar. Declaring it beats letting the
+    // shell borrow the first view's icon, which made every module that opens
+    // on an overview render the same square as every other one.
+    icon: 'i-server',
     views: VIEWS,
     ui: '/ui/index.js',
     health: '/api/health',
@@ -136,6 +140,37 @@ app.get('/api/hosts/:id/logs/:unit', async (req, res) => {
     });
     const body = await upstream.json();
     return res.status(upstream.status).json(body);
+  } catch (e) {
+    return res.status(502).json({ error: e.message });
+  }
+});
+
+/**
+ * Processes, for hosts whose API has them.
+ *
+ * This is what the laptop's own console module used to be for. Folding it in
+ * here means one page per machine rather than a module for one of them and a
+ * fleet view for the rest — and the machine does not stop being a machine
+ * because it happens to be the one I am sitting at.
+ */
+app.get('/api/hosts/:id/processes', async (req, res) => {
+  const host = config.hosts.find((h) => h.id === req.params.id);
+  const state = poller.get(req.params.id);
+  if (!host || !state) return res.status(404).json({ error: 'no such host' });
+  if (!state.capabilities?.processes) {
+    return res.status(501).json({ error: `${state.name} does not list processes` });
+  }
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 40));
+  const q = String(req.query.q || '').slice(0, 64);
+  try {
+    const url = new URL('/api/processes', host.origin);
+    url.searchParams.set('limit', String(limit));
+    if (q) url.searchParams.set('q', q);
+    const upstream = await fetch(url, {
+      headers: host.token ? { authorization: `Bearer ${host.token}` } : {},
+      signal: AbortSignal.timeout(10_000),
+    });
+    return res.status(upstream.status).json(await upstream.json());
   } catch (e) {
     return res.status(502).json({ error: e.message });
   }
