@@ -106,6 +106,10 @@ export class Poller extends EventEmitter {
       }
     }
 
+    // Always present, whichever way the probe went: the API and the UI should
+    // not have to ask whether a field exists before reading it.
+    next.graceMs = Number.isFinite(host.graceMs) ? host.graceMs : 0;
+
     if (next.online) {
       this.lastSeen.set(host.id, this.now());
       next.downSince = null;
