@@ -25,7 +25,6 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ADAPTERS, Poller } from './poller.js';
 import { Notifier } from './notify.js';
-import { fmtUptime } from './normalize.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -105,27 +104,40 @@ app.get('/api/summary', (req, res) => {
     .flatMap((h) => (h.disks || []).map((d) => ({ ...d, host: h.name })))
     .filter((d) => Number.isFinite(d.pct))
     .sort((a, b) => b.pct - a.pct)[0];
-  const oldest = s.hosts
-    .filter((h) => h.online && Number.isFinite(h.uptime))
-    .sort((a, b) => b.uptime - a.uptime)[0];
+  // A host that answers but whose sample is old is a different failure from
+  // one that does not answer at all, and the difference matters: the page is
+  // showing you numbers that are no longer true.
+  const stale = s.hosts.filter((h) => h.online && h.at && Date.now() - h.at > 120_000);
 
+  // Facts are EXCEPTIONS, not statistics. A number that reads the same every
+  // day teaches you to stop reading the card — "fullest disk: 56%" and
+  // "longest up: 57d" were true, stable, and worth nothing at a glance. So a
+  // measurement only earns a slot once it crosses into being worth acting on;
+  // when nothing has, the card is short, which is itself the report.
   const facts = [
     {
       k: 'Machines',
       v: down.length ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down` : `${s.total} up`,
     },
     services.length
-      ? { k: 'Services', v: running === services.length ? `all ${services.length} running` : `${services.length - running} stopped of ${services.length}` }
+      ? {
+        k: 'Services',
+        v: running === services.length
+          ? `all ${services.length} running`
+          : `${services.length - running} stopped of ${services.length}`,
+      }
       : null,
-    tightest
-      ? { k: 'Fullest disk', v: `${tightest.host} ${tightest.label} · ${Math.round(tightest.pct)}%` }
+    // Only once a disk is actually filling up.
+    tightest && tightest.pct >= 80
+      ? { k: 'Disk', v: `${tightest.host} ${tightest.label} · ${Math.round(tightest.pct)}% full` }
+      : null,
+    stale.length
+      ? { k: 'Stale', v: `${stale.map((h) => h.name).join(', ')} not reporting` }
       : null,
     s.alerts.length
       ? { k: 'Needs attention', v: `${s.alerts.length} alert${s.alerts.length === 1 ? '' : 's'}` }
-      : oldest
-        ? { k: 'Longest up', v: `${oldest.name} · ${fmtUptime(oldest.uptime)}` }
-        : null,
-  ].filter(Boolean);
+      : null,
+  ].filter(Boolean).slice(0, 4);
 
   res.json({
     status: s.status === 'unknown' ? 'warn' : s.status,

@@ -187,17 +187,26 @@ function hostCard(h) {
     .filter((d) => Number.isFinite(d.pct))
     .sort((a, b) => b.pct - a.pct)[0] || null;
 
-  return el('article', { class: `panel fl-card ${h.online ? '' : 'is-off'}` },
-    el('header', { class: 'fl-card-head' },
-      dot(h.status || (h.online ? 'ok' : 'err')),
-      el('button', {
-        class: 'fl-card-name',
-        type: 'button',
-        onclick: () => { state.selected = h.id; go('hosts'); },
-      }, h.name),
-      el('span', { class: 'fl-card-role meta' }, h.role || h.kind)),
+  // The whole card opens the host. Only the name was clickable, which means
+  // the obvious gesture — click the machine you are looking at — did nothing
+  // across nine tenths of the target.
+  const open = () => { state.selected = h.id; go('hosts'); };
+  return el('article', {
+    class: `panel fl-card is-clickable ${h.online ? '' : 'is-off'}`,
+    role: 'button',
+    tabindex: '0',
+    'aria-label': `Open ${h.name}`,
+    onclick: open,
+    onkeydown: (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+    },
+  },
+  el('header', { class: 'fl-card-head' },
+    dot(h.status || (h.online ? 'ok' : 'err')),
+    el('span', { class: 'fl-card-name' }, h.name),
+    el('span', { class: 'fl-card-role meta' }, h.role || h.kind)),
 
-    h.online
+  h.online
       ? el('div', { class: 'fl-card-body' },
         bar(h.cpu?.pct, 'CPU', { text: `${fmtPct(h.cpu?.pct)}${Number.isFinite(h.cpu?.tempC) ? ` · ${fmtTemp(h.cpu.tempC)}` : ''}` }),
         h.mem ? bar(memPct, 'Memory', { text: `${fmtPct(memPct)} · ${fmtBytes(h.mem.used)}` })
