@@ -61,6 +61,12 @@ button.fl-row:hover .fl-row-name { color: var(--accent); }
 /* Not answering, but not yet news: visible without the alarm colour. */
 .fl-card.is-blip { border-color: var(--warn); border-style: dashed; }
 .fl-card-off.is-pending strong { color: var(--warn); }
+/* Away: a machine that is somewhere else. Dimmed rather than coloured — the
+   border keeps its ordinary line, only fainter, because nothing about it is
+   asking for attention. */
+.fl-card.is-away { opacity: 0.72; border-style: dashed; }
+.fl-card.is-away:hover { opacity: 1; }
+.fl-card-off.is-away strong { color: var(--ink-2); }
 .fl-dot-pending {
   background: var(--warn);
   animation: fl-blip 1.6s ease-in-out infinite;

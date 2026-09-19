@@ -90,9 +90,14 @@ app.get('/api/summary', (req, res) => {
   // A host inside its grace window is not reported as down: it is a blip that
   // has not yet earned anyone's attention, and saying "1 of 3 unreachable" on
   // the front page IS telling you about it.
-  const down = s.hosts.filter((h) => !h.online && !h.pending);
+  // A roaming machine that is away is neither down nor blipping — it is a
+  // laptop in a bag, and the front page says where it is without counting it
+  // against anything.
+  const away = s.hosts.filter((h) => h.away);
+  const down = s.hosts.filter((h) => !h.online && !h.pending && !h.away);
   const blipping = s.hosts.filter((h) => !h.online && h.pending);
   const degraded = s.hosts.filter((h) => h.online && h.status !== 'ok');
+  const awayNote = away.length ? ` · ${away.map((h) => h.name).join(', ')} away` : '';
 
   const headline = down.length
     ? `${down.length} of ${s.total} unreachable`
@@ -100,7 +105,9 @@ app.get('/api/summary', (req, res) => {
       ? `${s.total} hosts · ${degraded.length} need attention`
       : blipping.length
         ? `${s.total} hosts · ${blipping.map((h) => h.name).join(', ')} not answering`
-        : `${s.total} hosts · all healthy`;
+        : away.length
+          ? `${s.online} up${awayNote}`
+          : `${s.total} hosts · all healthy`;
 
   // Four facts, and each one has to be worth the space on a front page.
   //
@@ -110,9 +117,13 @@ app.get('/api/summary', (req, res) => {
   // usually fine anyway. What you actually want to know before opening
   // anything is whether everything is up, whether anything stopped, and
   // whether something is about to run out of disk.
-  const services = s.hosts.flatMap((h) => h.services || []);
+  // An away host's services and disks are the last numbers it sent before it
+  // left. Counting them would report "all 31 running" for services that are,
+  // right now, not running anywhere — so only machines that are here count.
+  const present = s.hosts.filter((h) => !h.away);
+  const services = present.flatMap((h) => h.services || []);
   const running = services.filter((x) => x.ok).length;
-  const tightest = s.hosts
+  const tightest = present
     .flatMap((h) => (h.disks || []).map((d) => ({ ...d, host: h.name })))
     .filter((d) => Number.isFinite(d.pct))
     .sort((a, b) => b.pct - a.pct)[0];
@@ -130,10 +141,12 @@ app.get('/api/summary', (req, res) => {
     {
       k: 'Machines',
       v: down.length
-        ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down`
+        ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down${awayNote}`
         : blipping.length
-          ? `${s.online} up · ${blipping.map((h) => h.name).join(', ')} retrying`
-          : `${s.total} up`,
+          ? `${s.online} up · ${blipping.map((h) => h.name).join(', ')} retrying${awayNote}`
+          : away.length
+            ? `${s.online} up${awayNote}`
+            : `${s.total} up`,
     },
     services.length
       ? {

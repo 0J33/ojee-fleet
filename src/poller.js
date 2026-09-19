@@ -186,13 +186,31 @@ export class Poller extends EventEmitter {
       next.status = prev?.status && prev.status !== 'unknown' ? prev.status : 'ok';
     }
 
+    // A roaming machine that does not answer is AWAY: a state of its own,
+    // neither the green of "fine" nor the red of "come and look". Every alert
+    // goes with it, not just `unreachable` — the only readings left are the
+    // last ones it sent before it left, and a disk alert computed from a
+    // number that is hours old describes a machine that is not there.
+    next.away = !next.online && host.roaming === true;
+    if (next.away) {
+      next.pending = false;
+      next.alerts = [];
+      next.status = 'away';
+    }
+
     const before = prev?.status;
     this.state.set(host.id, next);
     this.pushHistory(host.id, next);
 
     // Only transitions are events. A host that has been down for an hour is
     // not news every ten seconds.
-    if (before && before !== next.status) {
+    //
+    // And for a machine that is expected to leave, leaving is not news
+    // either, and nor is coming back healthy — that is someone opening their
+    // laptop. Coming back WITH something wrong is, so away -> err still goes
+    // out, phrased as the problem it came back with.
+    const quiet = next.status === 'away' || (before === 'away' && next.status === 'ok');
+    if (before && before !== next.status && !quiet) {
       this.emit('transition', { host: next, from: before, to: next.status });
     }
     return next;
@@ -222,6 +240,7 @@ export class Poller extends EventEmitter {
       alerts,
       status: hosts.length ? worst(alerts.length ? alerts : [{ severity: 'ok' }]) : 'unknown',
       online: hosts.filter((h) => h.online).length,
+      away: hosts.filter((h) => h.away).length,
       total: hosts.length,
     };
   }

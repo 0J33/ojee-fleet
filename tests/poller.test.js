@@ -188,6 +188,109 @@ test('a brief disconnect is not an outage', async (t) => {
   });
 });
 
+test('a roaming machine that leaves is away, not down', async (t) => {
+  // The laptop: shut down and carried out of the house for an afternoon. A
+  // grace window cannot cover that — it is not a long blip, it is somewhere
+  // else — so nothing about its absence may reach Discord, the phone, or the
+  // colour of the front page.
+  const clock = { t: 5_000_000 };
+  const now = () => clock.t;
+  const laptop = { id: 'box', name: 'box', kind: 'fake', roaming: true, graceMs: 300_000 };
+  const build = (steps) => {
+    scripted = steps; callCount = 0;
+    return new Poller({ hosts: [laptop], intervalMs: 10_000, historyLength: 10, now });
+  };
+  const gone = { online: false, error: 'connect ETIMEDOUT', alerts: [] };
+  const HOURS = 4 * 3600_000;
+
+  await t.test('hours gone: away, silent, and not red', async () => {
+    const p = build([healthy(), gone]);
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(laptop);
+    clock.t += HOURS;                    // far past the grace window
+    await p.probeOne(laptop);
+
+    const h = p.get('box');
+    assert.equal(h.away, true);
+    assert.equal(h.status, 'away');
+    assert.equal(h.alerts.length, 0, 'no unreachable alert, and no stale ones either');
+    assert.equal(h.pending, false, 'it is not a blip being waited out');
+    assert.deepEqual(pings, ['unknown->ok'], 'leaving sent nothing');
+
+    const snap = p.snapshot();
+    assert.equal(snap.status, 'ok', 'the fleet roll-up stays green');
+    assert.equal(snap.away, 1);
+  });
+
+  await t.test('stale readings do not raise alerts while it is away', async () => {
+    // Its last sample had a nearly full disk. That was true then; it is not
+    // something to be told about about a machine that is switched off.
+    const full = healthy({ disks: [{ label: '/', pct: 99 }] });
+    const p = build([full, gone]);
+    await p.probeOne(laptop);
+    assert.ok(p.get('box').alerts.length > 0, 'the full disk alerts while it is here');
+    clock.t += HOURS;
+    await p.probeOne(laptop);
+    assert.equal(p.get('box').alerts.length, 0);
+  });
+
+  await t.test('opening the lid again is not news', async () => {
+    const p = build([healthy(), gone, healthy()]);
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(laptop);
+    clock.t += HOURS; await p.probeOne(laptop);
+    clock.t += 10_000; await p.probeOne(laptop);
+
+    const h = p.get('box');
+    assert.equal(h.status, 'ok');
+    assert.equal(h.away, false);
+    assert.deepEqual(pings, ['unknown->ok'], 'no "went away", no "recovered"');
+  });
+
+  await t.test('coming back WITH a problem is news', async () => {
+    const sick = healthy({ disks: [{ label: '/', pct: 99 }] });
+    const p = build([healthy(), gone, sick]);
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(laptop);
+    clock.t += HOURS; await p.probeOne(laptop);
+    clock.t += 10_000; await p.probeOne(laptop);
+
+    assert.equal(p.get('box').status, 'err');
+    assert.deepEqual(pings, ['unknown->ok', 'away->err']);
+  });
+
+  await t.test('starting up while it is already away is silent too', async () => {
+    const p = build([gone]);
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(laptop);
+    assert.equal(p.get('box').status, 'away');
+    assert.deepEqual(pings, [], 'unknown->away is not an event');
+  });
+
+  await t.test('a machine that is NOT roaming still alerts when it goes', async () => {
+    // The flag is the whole difference: the server in another country going
+    // quiet for four hours is exactly what this page is for.
+    const server = { ...laptop, roaming: false };
+    scripted = [healthy(), gone]; callCount = 0;
+    const p = new Poller({ hosts: [server], intervalMs: 10_000, historyLength: 10, now });
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(server);
+    // The grace window runs from the first FAILED probe, so the drop has to
+    // be seen, and then seen again once the window has passed — as it would
+    // be by a poller asking every ten seconds.
+    clock.t += 10_000; await p.probeOne(server);
+    clock.t += HOURS; await p.probeOne(server);
+    assert.equal(p.get('box').status, 'err');
+    assert.equal(p.get('box').away, false);
+    assert.deepEqual(pings, ['unknown->ok', 'ok->err']);
+  });
+});
+
 test('a service seen down once is a service being restarted', async (t) => {
   const withSvc = (ok) => healthy({ services: [{ id: 'n8n', name: 'n8n', ok }] });
 

@@ -87,8 +87,12 @@ const api = async (path, opts = {}) => ctx.api(path.replace(/^\/api/, ''), opts)
 /* The design system's own dot, not one of ours. It already has ok/warn/err
    and the pulse on err; a second implementation next to it is how two things
    that mean the same thing end up looking different. */
+// `away` is the design system's bare dot: grey, no glow. Not the green that
+// says all is well, not the red that says come and look — a machine that is
+// somewhere else.
 const dot = (status) => el('span', {
-  class: `dot dot--${status === 'err' ? 'err' : status === 'warn' ? 'warn' : 'ok'}`,
+  class: status === 'away' ? 'dot'
+    : `dot dot--${status === 'err' ? 'err' : status === 'warn' ? 'warn' : 'ok'}`,
   title: status,
 });
 
@@ -192,7 +196,7 @@ function hostCard(h) {
   // across nine tenths of the target.
   const open = () => { state.selected = h.id; go('hosts'); };
   return el('article', {
-    class: `panel fl-card is-clickable ${h.online ? '' : h.pending ? 'is-blip' : 'is-off'}`,
+    class: `panel fl-card is-clickable ${h.online ? '' : h.pending ? 'is-blip' : h.away ? 'is-away' : 'is-off'}`,
     role: 'button',
     tabindex: '0',
     'aria-label': `Open ${h.name}`,
@@ -219,15 +223,22 @@ function hostCard(h) {
         worstDisk ? bar(worstDisk.pct, `Disk ${worstDisk.label}`,
           { text: `${fmtPct(worstDisk.pct)} · ${fmtBytes(worstDisk.total - worstDisk.used)} free` }) : null,
         h.gpu ? bar(h.gpu.pct, 'GPU', { text: `${fmtPct(h.gpu.pct)}${Number.isFinite(h.gpu.tempC) ? ` · ${fmtTemp(h.gpu.tempC)}` : ''}` }) : null)
-      : el('div', { class: `fl-card-off ${h.pending ? 'is-pending' : ''}` },
-        // A blip says so plainly and does not shout. It is still on screen —
-        // not alerting is not the same as not telling.
-        el('strong', {}, h.pending ? 'Not answering' : 'Unreachable'),
-        el('span', { class: 'meta' }, h.error || ''),
-        el('span', { class: 'meta' },
-          h.pending
-            ? `retrying · ${ago(h.downSince)} so far, alerts after ${Math.round((h.graceMs || 0) / 60000)} min`
-            : `last seen ${ago(h.lastSeen)}`)),
+      : h.away
+        // Away says where it is, not what went wrong: the connection error
+        // ("connect ETIMEDOUT") is true and beside the point for a laptop that
+        // is switched off in a bag.
+        ? el('div', { class: 'fl-card-off is-away' },
+          el('strong', {}, 'Away'),
+          el('span', { class: 'meta' }, 'not watched while it is away'))
+        : el('div', { class: `fl-card-off ${h.pending ? 'is-pending' : ''}` },
+          // A blip says so plainly and does not shout. It is still on screen —
+          // not alerting is not the same as not telling.
+          el('strong', {}, h.pending ? 'Not answering' : 'Unreachable'),
+          el('span', { class: 'meta' }, h.error || ''),
+          el('span', { class: 'meta' },
+            h.pending
+              ? `retrying · ${ago(h.downSince)} so far, alerts after ${Math.round((h.graceMs || 0) / 60000)} min`
+              : `last seen ${ago(h.lastSeen)}`)),
 
     el('footer', { class: 'fl-card-foot' },
       el('span', { class: 'meta' },
@@ -239,15 +250,23 @@ function hostCard(h) {
         : el('span', { class: 'meta' }, 'nothing to report')));
 }
 
+/* An away machine is left out of both halves of "N of M": it is not
+   reachable, and it is not missing either. */
+function verdictText(d) {
+  const away = d.hosts.filter((h) => h.away);
+  const missing = d.hosts.filter((h) => !h.online && !h.away);
+  const note = away.length ? ` · ${away.map((h) => h.name).join(', ')} away` : '';
+  const here = d.total - away.length;
+  if (missing.length) return `${missing.length} of ${here} unreachable${note}`;
+  return `${here === d.total ? 'All ' : ''}${here} machine${here === 1 ? '' : 's'} reachable${note}`;
+}
+
 function viewOverview(d) {
   const wrap = el('section', { class: 'stack-lg' });
 
   wrap.append(el('div', { class: 'fl-verdict' },
     dot(d.status),
-    el('strong', {},
-      d.online === d.total
-        ? `All ${d.total} machines reachable`
-        : `${d.total - d.online} of ${d.total} unreachable`),
+    el('strong', {}, verdictText(d)),
     el('span', { class: 'meta' },
       d.alerts.length ? `${d.alerts.length} thing${d.alerts.length > 1 ? 's' : ''} to look at` : 'nothing to look at'),
     el('span', { class: 'fl-live meta' }, state.live ? 'live' : 'polling')));
@@ -369,7 +388,12 @@ function viewHosts(d) {
 
   return el('section', { class: 'stack-lg' },
     picker,
-    !current.online
+    current.away
+      ? el('div', { class: 'alert alert--info' },
+        `${current.name} is away — last seen ${ago(current.lastSeen)}. `
+          + 'It is a machine that leaves, so while it is gone nothing here is an alert '
+          + 'and nothing is sent. The numbers below are the last ones it reported.')
+    : !current.online
       ? el('div', { class: `alert ${current.pending ? 'alert--warn' : 'alert--err'}` },
         current.pending
           ? `${current.name} has not answered since ${ago(current.downSince)} — ${current.error || 'no reason given'}. `

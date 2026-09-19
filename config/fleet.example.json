@@ -1,21 +1,28 @@
 {
   "_comment": [
     "Copy to fleet.json. This file is WHICH MACHINES this deployment watches.",
-    "It holds no secrets \u2014 HOST_<ID>_TOKEN in the environment supplies those \u2014",
+    "It holds no secrets — HOST_<ID>_TOKEN in the environment supplies those —",
     "so a private deployment repo can commit it.",
     "",
     "kind picks the adapter:",
     "  teg    a Flask dashboard API, shared bearer",
     "  agent  ojee-agent, systeminformation + docker",
     "  loq    ojee-loq, /proc + RAPL + nvidia-smi",
-    "  local  the machine this module runs on \u2014 /proc, /sys, docker.sock,",
+    "  local  the machine this module runs on — /proc, /sys, docker.sock,",
     "         no origin and no token, because there is nothing to dial",
     "",
     "mute lists alert kinds this host should never raise. See ALERT_KINDS in",
     "laptop under load and means a failed fan on a server.",
     "A gaming laptop runs its CPU and GPU hot under load by design, so loq",
     "mutes both temperature rules and the throttle counter. The same numbers",
-    "on a server would mean a failed fan, which is why muting is per host."
+    "on a server would mean a failed fan, which is why muting is per host.",
+    "",
+    "roaming marks a machine that LEAVES — a laptop. When it stops answering",
+    "it is `away`: a grey state of its own, with no alert, no Discord post and",
+    "no phone notification, because a laptop that is shut down and carried out",
+    "of the house is being used as intended. Coming back healthy is silent too;",
+    "coming back with something wrong is announced. Leave it off for anything",
+    "that is meant to stay up — a server going quiet is what this page is for."
   ],
   "intervalMs": 10000,
   "historyLength": 90,
@@ -23,7 +30,7 @@
     {
       "id": "disinteg",
       "name": "disinteg",
-      "role": "Games, APIs and the NAS \u00b7 Canada",
+      "role": "Games, APIs and the NAS · Canada",
       "kind": "teg",
       "origin": "https://tegtech-api.ojee.net",
       "links": [
@@ -41,14 +48,14 @@
     {
       "id": "hp",
       "name": "ojee-hp-zorin",
-      "role": "Home lab \u00b7 the box this runs on",
+      "role": "Home lab · the box this runs on",
       "kind": "local",
       "enabled": true
     },
     {
       "id": "loq",
       "name": "OJEE-LOQ-ZORIN",
-      "role": "Laptop \u00b7 the machine I work on",
+      "role": "Laptop · the machine I work on",
       "kind": "loq",
       "origin": "http://100.81.241.55:8300",
       "enabled": true,
@@ -56,7 +63,8 @@
         "cpu-temp",
         "cpu-throttle",
         "gpu-temp"
-      ]
+      ],
+      "roaming": true
     }
   ]
 }

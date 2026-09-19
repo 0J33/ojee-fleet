@@ -34,6 +34,16 @@ function readFile(p) {
   }
 }
 
+/** "1/true/yes" and "0/false/no", or undefined when unset or unrecognised —
+    so a typo in the environment falls back to the file instead of flipping. */
+function parseBool(v) {
+  if (v == null || v === '') return undefined;
+  const t = String(v).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(t)) return true;
+  if (['0', 'false', 'no', 'off'].includes(t)) return false;
+  return undefined;
+}
+
 export function loadConfig() {
   const raw = readFile(CONFIG_PATH)
     || readFile(path.join(HERE, '..', 'config', 'fleet.example.json'))
@@ -61,6 +71,11 @@ export function loadConfig() {
         // go away for a minute and come back, and a monitor that announces
         // every one of them is a monitor you mute.
         graceMs: Number(process.env[`HOST_${key}_GRACE_MS`] ?? h.graceMs ?? NaN),
+        // A machine that LEAVES — a laptop that goes in a bag. A grace window
+        // is the wrong tool for it: grace is for a blip, and a laptop that is
+        // off for an afternoon is not a long blip, it is somewhere else. Its
+        // absence is a state to show, not a fault to announce.
+        roaming: parseBool(process.env[`HOST_${key}_ROAMING`]) ?? h.roaming === true,
       };
     });
 

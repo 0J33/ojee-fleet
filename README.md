@@ -79,6 +79,34 @@ So a host has a **grace window** — five minutes by default, `downGraceMs` in t
 
 Past the window it becomes an ordinary unreachable host, announced exactly once.
 
+### Machines that leave
+
+A grace window is for a blip. A laptop that is shut down and carried out of the house for an
+afternoon is not a long blip — it is somewhere else — and no window is long enough to cover it
+without also hiding a server that has genuinely gone quiet for the same afternoon.
+
+So a host can say it is one that leaves:
+
+```jsonc
+{ "id": "loq", "kind": "loq", "roaming": true }
+```
+
+When a roaming host stops answering it is **away**: a state of its own, drawn in the design
+system's grey rather than green or red.
+
+- **Nothing is sent.** No Discord post, no phone notification, and the fleet's roll-up stays green,
+  because leaving is not a change in anyone's health.
+- **Every alert goes, not just `unreachable`.** The only numbers left are the last ones it sent
+  before it left, and a disk alert computed from a reading that is hours old describes a machine
+  that is not there.
+- **Its services and disks stop counting.** "All 31 services running" must not include services
+  that are, right now, not running anywhere.
+- **Coming back healthy is silent too** — that is someone opening their laptop. Coming back *with
+  something wrong* is announced as the problem it came back with (`away → err`).
+
+`HOST_<ID>_ROAMING=1` sets it without editing config. Leave it off for anything that is meant to
+stay up.
+
 ### What counts as a service
 
 Not every container the daemon knows about. Three kinds are not services and were all being
@@ -195,6 +223,7 @@ private deployment repo can commit it. Credentials come from the environment:
 | `FLEET_POLL_MS` | default 10000 |
 | `FLEET_DOWN_GRACE_MS` | default 300000 — how long a host may be missing before it is news |
 | `HOST_<ID>_GRACE_MS` | the same, for one host |
+| `HOST_<ID>_ROAMING` | `1` for a machine that leaves — its absence is `away`, not an alert |
 | `PORT` / `BIND` | default `0.0.0.0:8400` |
 
 Mounted in a console, add it to `config/console.json` like any other module.
