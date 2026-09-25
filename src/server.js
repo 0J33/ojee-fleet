@@ -175,6 +175,20 @@ app.get('/api/summary', (req, res) => {
     alerts: s.alerts.slice(0, 5).map((a) => ({
       text: a.text, severity: a.severity, view: 'alerts',
     })),
+    // The console draws this module as a rack: one tower per machine, its
+    // frame lit while the machine answers, a bead per stopped service and a
+    // fill that tracks load. Hosts go in configuration order so a tower means
+    // the same machine from one poll to the next, and an away laptop simply
+    // goes dark — the frame with nothing on it is "not here", which is what
+    // it is.
+    model: {
+      hosts: s.hosts.map((h) => ({
+        name: h.name,
+        up: h.online === true,
+        load: Number.isFinite(h.cpu?.pct) ? Math.max(0, Math.min(1, h.cpu.pct / 100)) : 0,
+        failing: (h.services || []).filter((x) => !x.ok).length,
+      })),
+    },
   });
 });
 
