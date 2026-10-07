@@ -324,21 +324,33 @@ function viewHosts(d) {
               key === 'temp' ? fmtTemp(now) : fmtPct(now))),
           spark(samples, key, { max: 100, unit: key === 'temp' ? '°C' : '%' })))));
 
+  // Storage: every mounted filesystem with its usage, then any physical disk
+  // that has nothing mounted from it — a spare SSD, an enclosure plugged in
+  // but not mounted. A host that reports drives and no usage at all lists
+  // the drives as hardware rather than drawing bars that could only read 0.
+  const fsList = current.disks || [];
+  const driveRow = (dv) => el('div', { class: 'fl-row fl-drive' },
+    el('span', { class: 'fl-drive-dev' }, dv.device),
+    el('span', { class: 'fl-drive-model meta', title: dv.model || '' },
+      [dv.model || 'unknown', dv.kind, fsList.length && dv.mounted === false ? 'not mounted' : null]
+        .filter(Boolean).join(' · ')),
+    el('span', { class: 'fl-drive-size tnum' }, fmtBytes(dv.size)),
+    Number.isFinite(dv.tempC) ? el('span', { class: 'meta tnum' }, fmtTemp(dv.tempC)) : el('span'));
+  const spare = fsList.length ? (current.drives || []).filter((dv) => dv.mounted === false) : (current.drives || []);
   const disks = el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, (current.disks || []).length ? 'Filesystems' : 'Drives'),
-    (current.disks || []).length
-      ? el('div', { class: 'stack' }, current.disks.map((dk) => bar(dk.pct,
-        `${dk.label}${dk.device ? ` · ${dk.device}` : ''}${dk.remote ? ' · network' : ''}`,
-        { text: `${fmtBytes(dk.used)} of ${fmtBytes(dk.total)}` })))
-      // Some hosts report the physical drives and no usage at all. Say what
-      // they are rather than drawing usage bars that could only sit at zero.
-      : (current.drives || []).length
-        ? el('div', { class: 'fl-list' }, current.drives.map((dv) => el('div', { class: 'fl-row fl-drive' },
-          el('span', { class: 'fl-drive-dev' }, dv.device),
-          el('span', { class: 'fl-drive-model meta', title: dv.model || '' }, dv.model || 'unknown'),
-          el('span', { class: 'fl-drive-size tnum' }, fmtBytes(dv.size)),
-          Number.isFinite(dv.tempC) ? el('span', { class: 'meta tnum' }, fmtTemp(dv.tempC)) : null)))
-        : el('p', { class: 'meta' }, 'This host does not report storage.'));
+    el('h3', { class: 'h3' }, fsList.length ? 'Filesystems' : 'Drives'),
+    fsList.length
+      ? el('div', { class: 'stack' }, fsList.map((dk) => el('div', { class: 'fl-fs' },
+        bar(dk.pct, dk.label, {
+          text: `${fmtBytes(dk.used)} of ${fmtBytes(dk.total)}`
+            + `${Number.isFinite(dk.free) ? ` · ${fmtBytes(dk.free)} free` : ''}`,
+        }),
+        el('p', { class: 'meta fl-fs-meta' },
+          [dk.device, dk.fstype, dk.model, dk.remote ? 'network' : null].filter(Boolean).join(' · ')))))
+      : null,
+    spare.length
+      ? el('div', { class: 'fl-list' }, spare.map(driveRow))
+      : fsList.length ? null : el('p', { class: 'meta' }, 'This host does not report storage.'));
 
   const gpu = current.gpu ? el('section', { class: 'panel stack' },
     el('h3', { class: 'h3' }, 'GPU'),
@@ -508,11 +520,31 @@ function viewServices(d) {
     servicesPanel(d.hosts));
 }
 
+/**
+ * Problems seen but not yet held long enough to count (the poller's
+ * hysteresis). Shown quietly: not alerting is not the same as not telling,
+ * but a restart in progress must not look like an outage either.
+ */
+function pendingPanel(d) {
+  const list = d.hosts.flatMap((h) => (h.pendingAlerts || []).map((a) => ({ ...a, hostName: h.name })));
+  if (!list.length) return null;
+  return el('section', { class: 'panel stack' },
+    el('h3', { class: 'h3' }, 'Waiting to confirm'),
+    el('p', { class: 'meta' }, 'Seen, but not for long enough to be an alert. Most of these are restarts.'),
+    el('div', { class: 'fl-list' }, list.map((a) => el('div', { class: 'fl-row fl-alert' },
+      el('span', { class: 'dot fl-dot-pending' }),
+      el('span', { class: 'fl-alert-text' },
+        a.hostName && !a.text.includes(a.hostName) ? `${a.hostName}: ${a.text}` : a.text),
+      el('span', { class: 'fl-alert-hint meta' }, `first seen ${ago(a.since)}`)))));
+}
+
 function viewAlerts(d) {
   if (!d.alerts.length) {
-    return el('div', { class: 'empty' },
-      el('p', {}, el('strong', {}, 'Nothing is wrong.')),
-      el('p', { class: 'meta' }, `${d.total} machines, all reporting normally.`));
+    return el('section', { class: 'stack-lg' },
+      el('div', { class: 'empty' },
+        el('p', {}, el('strong', {}, 'Nothing is wrong.')),
+        el('p', { class: 'meta' }, `${d.total} machines, all reporting normally.`)),
+      pendingPanel(d));
   }
   const byHost = new Map();
   for (const a of d.alerts) {
@@ -531,7 +563,8 @@ function viewAlerts(d) {
             onclick: () => { state.selected = id; go('hosts'); },
           }, 'Open')),
         el('div', { class: 'fl-list' }, list.map((a) => alertRow(a))));
-    }));
+    }),
+    pendingPanel(d));
 }
 
 /* ── actions ─────────────────────────────────────────────────────────── */

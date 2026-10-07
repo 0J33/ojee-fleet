@@ -9,7 +9,12 @@
  *     worse than one that never sent them.
  *
  *   - A recovery is sent too. A pager that only ever tells you about breakage
- *     leaves you refreshing a page to find out whether it is over.
+ *     leaves you refreshing a page to find out whether it is over. But ONLY
+ *     for a host this notifier announced as broken: "healthy again" about
+ *     something you were never told was unhealthy is a second blip report.
+ *
+ * The poller already collapses each incident into one open / one recover
+ * (Poller.announce); the rules here are the last line, not the first.
  */
 
 const COLORS = { ok: 0x00c980, warn: 0xffb020, err: 0xff4444, unknown: 0x8b8b9a };
@@ -21,6 +26,7 @@ export class Notifier {
     this.fetch = fetchImpl;
     this.now = now;
     this.lastSent = new Map();          // tag -> timestamp
+    this.announced = new Set();         // host ids with a sent, unrecovered alert
   }
 
   get enabled() { return !!this.webhook; }
@@ -37,8 +43,15 @@ export class Notifier {
     if (!this.enabled) return false;
     // Recovering from "we have not asked yet" is not an event.
     if (from === 'unknown' || !from) return false;
-    const tag = `${host.id}:${to}`;
-    if (!this.allow(tag)) return false;
+    if (to === 'ok') {
+      // Recovery is never rate-limited, and never sent for a break that was not.
+      if (!this.announced.has(host.id)) return false;
+      this.announced.delete(host.id);
+    } else {
+      const tag = `${host.id}:${to}`;
+      if (!this.allow(tag)) return false;
+      this.announced.add(host.id);
+    }
 
     const worstAlert = (host.alerts || []).find((a) => a.severity === to);
     const title = to === 'ok'

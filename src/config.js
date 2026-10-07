@@ -19,6 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { HYSTERESIS } from './normalize.js';
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = process.env.FLEET_CONFIG
   || path.join(HERE, '..', 'config', 'fleet.json');
@@ -76,6 +78,10 @@ export function loadConfig() {
         // off for an afternoon is not a long blip, it is somewhere else. Its
         // absence is a state to show, not a fault to announce.
         roaming: parseBool(process.env[`HOST_${key}_ROAMING`]) ?? h.roaming === true,
+        // How long a problem must hold before it counts (HYSTERESIS in
+        // normalize.js). NaN means "use the deployment's default".
+        sustainMs: Number(process.env[`HOST_${key}_SUSTAIN_MS`] ?? h.sustainMs ?? NaN),
+        sustainChecks: Number(process.env[`HOST_${key}_SUSTAIN_CHECKS`] ?? h.sustainChecks ?? NaN),
       };
     });
 
@@ -91,6 +97,10 @@ export function loadConfig() {
     // difference between a page that is current and one that is a minute old.
     intervalMs: Number(process.env.FLEET_POLL_MS || raw.intervalMs || 10_000),
     historyLength: Number(process.env.FLEET_HISTORY || raw.historyLength || 90),
+    sustain: {
+      ms: Number(process.env.FLEET_SUSTAIN_MS || raw.sustainMs || HYSTERESIS.ms),
+      checks: Number(process.env.FLEET_SUSTAIN_CHECKS || raw.sustainChecks || HYSTERESIS.checks),
+    },
     notify: {
       // A Discord webhook, when one is configured. Kept out of the config
       // file: it is a credential, and anyone holding it can post as me.

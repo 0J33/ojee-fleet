@@ -38,6 +38,7 @@ const poller = new Poller({
   hosts: config.hosts,
   intervalMs: config.intervalMs,
   historyLength: config.historyLength,
+  sustain: config.sustain,
 }).start();
 
 const notifier = new Notifier(config.notify);
@@ -330,9 +331,11 @@ app.get('/api/events', (req, res) => {
   send('state', poller.snapshot());
 
   const onUpdate = (s) => send('state', s);
+  // Transitions are already one per incident (see Poller.announce), so the
+  // phone hears exactly what Discord does.
   const onTransition = ({ host, from, to }) => {
     send('notify', {
-      title: to === 'ok' ? `${host.name} recovered` : `${host.name} is ${to}`,
+      title: to === 'ok' ? `${host.name} recovered` : `${host.name} is ${to === 'err' ? 'in trouble' : 'degraded'}`,
       body: (host.alerts || [])[0]?.text || `was ${from}`,
       tag: `fleet:${host.id}:${to}`,
     });

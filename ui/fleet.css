@@ -96,6 +96,8 @@ button.fl-row:hover .fl-row-name { color: var(--accent); }
 }
 
 .fl-metric { display: grid; gap: 6px; }
+.fl-fs { display: grid; gap: 4px; }
+.fl-fs-meta { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fl-metric-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); }
 .fl-metric-val { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-2); }
 .fl-metric--absent { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s-2); opacity: 0.55; }

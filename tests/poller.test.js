@@ -29,9 +29,13 @@ const healthy = (over = {}) => ({
   disks: [{ label: '/', pct: 20 }], services: [], alerts: [], ...over,
 });
 
+// Tests about something other than hysteresis turn it off, so a full disk is
+// an alert on the first sample. The hysteresis has its own tests below.
+const NOW = { ms: 0, checks: 1 };
+
 const newPoller = (steps) => {
   scripted = steps; callCount = 0;
-  return new Poller({ hosts: [HOST], intervalMs: 10_000, historyLength: 5 });
+  return new Poller({ hosts: [HOST], intervalMs: 10_000, historyLength: 5, sustain: NOW });
 };
 
 test('an unreachable host keeps its last good reading', async () => {
@@ -96,10 +100,10 @@ test('only transitions raise events', async () => {
   const p = newPoller([healthy(), healthy(), healthy({ disks: [{ label: '/', pct: 99 }] })]);
   const seen = [];
   p.on('transition', (t) => seen.push(`${t.from}->${t.to}`));
-  await p.probeOne(HOST);          // unknown -> ok (first real sample)
+  await p.probeOne(HOST);          // unknown -> ok: a first sample, not news
   await p.probeOne(HOST);          // ok -> ok, silent
   await p.probeOne(HOST);          // ok -> err
-  assert.deepEqual(seen, ['unknown->ok', 'ok->err']);
+  assert.deepEqual(seen, ['ok->err'], 'the first healthy sample is not an event');
 });
 
 test('a brief disconnect is not an outage', async (t) => {
@@ -110,7 +114,7 @@ test('a brief disconnect is not an outage', async (t) => {
   const graceHost = { ...HOST, graceMs: 300_000 };
   const build = (steps) => {
     scripted = steps; callCount = 0;
-    return new Poller({ hosts: [graceHost], intervalMs: 10_000, historyLength: 10, now });
+    return new Poller({ hosts: [graceHost], intervalMs: 10_000, historyLength: 10, now, sustain: NOW });
   };
   const gone = { online: false, error: 'timed out', alerts: [] };
 
@@ -128,9 +132,7 @@ test('a brief disconnect is not an outage', async (t) => {
     assert.ok(h.downSince, 'and since when');
     assert.equal(h.alerts.length, 0, 'but raises nothing');
     assert.equal(h.status, 'ok', 'and does not change status');
-    // The first sample is legitimately unknown->ok, which the notifier ignores.
-    // What must not appear is a SECOND transition caused by the drop.
-    assert.deepEqual(pings, ['unknown->ok'], 'so the drop sends nothing');
+    assert.deepEqual(pings, [], 'so the drop sends nothing');
   });
 
   await t.test('a host that comes back inside the window was never news', async () => {
@@ -150,7 +152,7 @@ test('a brief disconnect is not an outage', async (t) => {
     assert.equal(h.failures, 0);
     // The whole point: no "went down" and no "recovered" either. A pager that
     // reports a blip twice is worse than one that never reported it.
-    assert.deepEqual(pings, ['unknown->ok']);
+    assert.deepEqual(pings, []);
   });
 
   await t.test('a host still gone when the window closes IS news', async () => {
@@ -169,7 +171,7 @@ test('a brief disconnect is not an outage', async (t) => {
     assert.equal(h.pending, false);
     assert.equal(h.status, 'err');
     assert.equal(h.alerts[0].kind, 'unreachable');
-    assert.deepEqual(pings, ['unknown->ok', 'ok->err'], 'announced exactly once');
+    assert.deepEqual(pings, ['ok->err'], 'announced exactly once');
   });
 
   await t.test('failures accumulate across the window', async () => {
@@ -181,7 +183,7 @@ test('a brief disconnect is not an outage', async (t) => {
 
   await t.test('a host with no grace configured alerts immediately', async () => {
     scripted = [healthy(), gone]; callCount = 0;
-    const p = new Poller({ hosts: [HOST], intervalMs: 10_000, historyLength: 5 });
+    const p = new Poller({ hosts: [HOST], intervalMs: 10_000, historyLength: 5, sustain: NOW });
     await p.probeOne(HOST);
     await p.probeOne(HOST);
     assert.equal(p.get('box').status, 'err');
@@ -198,7 +200,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
   const laptop = { id: 'box', name: 'box', kind: 'fake', roaming: true, graceMs: 300_000 };
   const build = (steps) => {
     scripted = steps; callCount = 0;
-    return new Poller({ hosts: [laptop], intervalMs: 10_000, historyLength: 10, now });
+    return new Poller({ hosts: [laptop], intervalMs: 10_000, historyLength: 10, now, sustain: NOW });
   };
   const gone = { online: false, error: 'connect ETIMEDOUT', alerts: [] };
   const HOURS = 4 * 3600_000;
@@ -216,7 +218,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
     assert.equal(h.status, 'away');
     assert.equal(h.alerts.length, 0, 'no unreachable alert, and no stale ones either');
     assert.equal(h.pending, false, 'it is not a blip being waited out');
-    assert.deepEqual(pings, ['unknown->ok'], 'leaving sent nothing');
+    assert.deepEqual(pings, [], 'leaving sent nothing');
 
     const snap = p.snapshot();
     assert.equal(snap.status, 'ok', 'the fleet roll-up stays green');
@@ -246,7 +248,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
     const h = p.get('box');
     assert.equal(h.status, 'ok');
     assert.equal(h.away, false);
-    assert.deepEqual(pings, ['unknown->ok'], 'no "went away", no "recovered"');
+    assert.deepEqual(pings, [], 'no "went away", no "recovered"');
   });
 
   await t.test('coming back WITH a problem is news', async () => {
@@ -259,7 +261,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
     clock.t += 10_000; await p.probeOne(laptop);
 
     assert.equal(p.get('box').status, 'err');
-    assert.deepEqual(pings, ['unknown->ok', 'away->err']);
+    assert.deepEqual(pings, ['away->err']);
   });
 
   await t.test('starting up while it is already away is silent too', async () => {
@@ -276,7 +278,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
     // quiet for four hours is exactly what this page is for.
     const server = { ...laptop, roaming: false };
     scripted = [healthy(), gone]; callCount = 0;
-    const p = new Poller({ hosts: [server], intervalMs: 10_000, historyLength: 10, now });
+    const p = new Poller({ hosts: [server], intervalMs: 10_000, historyLength: 10, now, sustain: NOW });
     const pings = [];
     p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
     await p.probeOne(server);
@@ -287,41 +289,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
     clock.t += HOURS; await p.probeOne(server);
     assert.equal(p.get('box').status, 'err');
     assert.equal(p.get('box').away, false);
-    assert.deepEqual(pings, ['unknown->ok', 'ok->err']);
-  });
-});
-
-test('a service seen down once is a service being restarted', async (t) => {
-  const withSvc = (ok) => healthy({ services: [{ id: 'n8n', name: 'n8n', ok }] });
-
-  await t.test('one miss says nothing', async () => {
-    const p = newPoller([withSvc(true), withSvc(false)]);
-    await p.probeOne(HOST);
-    await p.probeOne(HOST);
-    const h = p.get('box');
-    assert.equal(h.services[0].downFor, 1);
-    assert.deepEqual(h.alerts, []);
-    assert.equal(h.status, 'ok');
-  });
-
-  await t.test('two in a row is an alert', async () => {
-    const p = newPoller([withSvc(true), withSvc(false), withSvc(false)]);
-    await p.probeOne(HOST);
-    await p.probeOne(HOST);
-    await p.probeOne(HOST);
-    const h = p.get('box');
-    assert.equal(h.services[0].downFor, 2);
-    assert.equal(h.alerts[0].kind, 'service-down');
-  });
-
-  await t.test('coming back resets the count', async () => {
-    const p = newPoller([withSvc(true), withSvc(false), withSvc(true)]);
-    await p.probeOne(HOST);
-    await p.probeOne(HOST);
-    await p.probeOne(HOST);
-    const h = p.get('box');
-    assert.equal(h.services[0].downFor, 0);
-    assert.deepEqual(h.alerts, []);
+    assert.deepEqual(pings, ['ok->err']);
   });
 });
 

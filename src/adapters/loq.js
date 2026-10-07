@@ -12,7 +12,9 @@
  * them here would mean two places that can disagree about the current state.
  */
 
-import { num, offlineHost, pct } from '../normalize.js';
+import {
+  joinStorage, num, offlineHost, pct, pickOs,
+} from '../normalize.js';
 
 const TIMEOUT_MS = 6000;
 const MB = 1024 * 1024;
@@ -62,6 +64,21 @@ export async function probe(host) {
     tempC: num(d.tempC ?? d.temp),
   })).filter((d) => d.device);
 
+  // Newer samplers also report what is MOUNTED, with usage, and what the
+  // machine says it runs (os-release). An older one reports neither, and the
+  // drives above are then all there is.
+  const mounts = (s.mounts || []).map((m) => ({
+    label: m.mount,
+    mount: m.mount,
+    device: m.device || null,
+    disk: m.disk || null,
+    fstype: m.fstype || null,
+    remote: false,
+    used: num(m.used), total: num(m.total), free: num(m.free),
+    pct: pct(num(m.used), num(m.total)),
+  })).filter((m) => m.mount && Number.isFinite(m.total));
+  const storage = joinStorage(mounts, drives);
+
   const bat = s.battery || null;
 
   return {
@@ -74,7 +91,7 @@ export async function probe(host) {
     // The sampler stamps its own sample; use it rather than "now" so a
     // wedged sampler shows as stale instead of eternally fresh.
     at: Number.isFinite(s.at) ? s.at * 1000 : Date.now(),
-    os: host.os || null,
+    os: pickOs(s.os, host.os),
     uptime: num(s.uptime),
     cpu: {
       model: s.cpu?.model || null,
@@ -105,8 +122,8 @@ export async function probe(host) {
       watts: num(bat.watts),
       health: num(bat.healthPct ?? bat.health),
     } : null,
-    disks: [],
-    drives,
+    disks: storage.disks,
+    drives: storage.drives,
     services: [],
     alerts,
     links: host.links || [],

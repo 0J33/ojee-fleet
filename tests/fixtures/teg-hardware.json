@@ -1,0 +1,46 @@
+{
+  "hostname": "disinteg-AW-AR7",
+  "kernel": "7.0.0-31-generic",
+  "os": "Ubuntu 24.04.1 LTS",
+  "arch": "x86_64",
+  "cpu": {
+    "model": "Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz",
+    "cores": 6,
+    "threads": 12,
+    "mhz_current": 4300,
+    "mhz_max": 4600
+  },
+  "memory_total": 16462774272,
+  "swap_total": 17179865088,
+  "gpus": [
+    {
+      "vendor": "CoffeeLake-S GT2 [UHD Graphics 630]\" -p00 \"Dell",
+      "model": "CoffeeLake-S GT2 [UHD Graphics 630]",
+      "driver": "i915",
+      "slot": "00:02.0"
+    },
+    {
+      "vendor": "GP107 [GeForce GTX 1050 Ti]\" -ra1 -p00 \"Dell",
+      "model": "GP107 [GeForce GTX 1050 Ti]",
+      "driver": "nvidia",
+      "slot": "01:00.0"
+    }
+  ],
+  "disks": [
+    {
+      "name": "sda",
+      "size": 2000398934016,
+      "model": "ST2000DM001-1ER164",
+      "kind": "HDD",
+      "bus": "sata"
+    },
+    {
+      "name": "sdb",
+      "size": 128035676160,
+      "model": "SK hynix SC311 SATA 128GB",
+      "kind": "SSD",
+      "bus": "sata"
+    }
+  ],
+  "boot_time": 1789705508
+}

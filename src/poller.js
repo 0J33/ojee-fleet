@@ -20,7 +20,7 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { applyMutes, deriveAlerts, worst } from './normalize.js';
+import { HYSTERESIS, alertKey, applyMutes, deriveAlerts, worst } from './normalize.js';
 
 import * as tegAdapter from './adapters/teg.js';
 import * as agentAdapter from './adapters/agent.js';
@@ -35,9 +35,14 @@ const ADAPTERS = {
 };
 
 export class Poller extends EventEmitter {
-  constructor({ hosts, intervalMs = 10_000, historyLength = 90, now = Date.now }) {
+  constructor({
+    hosts, intervalMs = 10_000, historyLength = 90, now = Date.now, sustain = HYSTERESIS,
+  }) {
     super();
     this.hosts = hosts;
+    // How long, and over how many polls, an alert has to hold before it
+    // counts. See `confirm()` below and HYSTERESIS in normalize.js.
+    this.sustain = { ...HYSTERESIS, ...(sustain || {}) };
     this.intervalMs = intervalMs;
     this.historyLength = historyLength;
     this.now = now;
@@ -50,6 +55,10 @@ export class Poller extends EventEmitter {
     this.history = new Map();
     /** id -> last time this host was reachable */
     this.lastSeen = new Map();
+    /** id -> Map(alert key -> {since, checks, confirmed}) */
+    this.alertClock = new Map();
+    /** id -> the open incident, {severity, since}, if one was announced */
+    this.incidents = new Map();
 
     for (const h of hosts) {
       this.state.set(h.id, {
@@ -106,16 +115,29 @@ export class Poller extends EventEmitter {
       }
     }
 
-    // How many polls in a row each service has been down. Restarting a
-    // container takes a few seconds and we look every ten, so a service seen
-    // down exactly once is usually a service being restarted — including by
-    // me, one command earlier. Two consecutive misses is the difference
-    // between "it is bouncing" and "it is gone".
+    // How many polls in a row each service has been down, and since when.
+    // The alert itself is gated by the same hysteresis as every other one
+    // (`confirm()` below); these two fields are what the page shows while it
+    // is being waited out.
+    //
+    // A service whose state the host could not determine (`ok: null` — its
+    // check timed out, say) is not a service that is down. It keeps whatever
+    // it was last seen as: "we did not find out" must neither raise an alert
+    // nor reset the clock of one that is already counting.
     if (Array.isArray(next.services) && next.services.length) {
       const before = new Map((prev?.services || []).map((x) => [x.id, x]));
-      next.services = next.services.map((svc) => (svc.ok === false
-        ? { ...svc, downFor: (before.get(svc.id)?.downFor || 0) + 1 }
-        : { ...svc, downFor: 0 }));
+      next.services = next.services.map((svc) => {
+        const was = before.get(svc.id);
+        const ok = svc.ok == null ? (was?.ok ?? true) : svc.ok;
+        if (ok !== false) return { ...svc, ok, downFor: 0, downSince: null };
+        return {
+          ...svc,
+          ok,
+          unknown: svc.ok == null || undefined,
+          downFor: (was?.downFor || 0) + 1,
+          downSince: was?.downSince || this.now(),
+        };
+      });
     }
 
     // Always present, whichever way the probe went: the API and the UI should
@@ -170,10 +192,16 @@ export class Poller extends EventEmitter {
     // Muting happens before the roll-up, not at render time: an alert this
     // host was told not to raise must not colour it red, must not flip its
     // status, and therefore must not reach Discord or a phone either.
-    next.alerts = applyMutes(
+    const raised = applyMutes(
       [...(next.alerts || []), ...deriveAlerts(next)],
       host.mute,
     );
+    // Hysteresis, also before the roll-up and for the same reason: an alert
+    // that has not held long enough must not move the status, because a
+    // status change is what pings.
+    const { confirmed, pending } = this.confirm(host, raised);
+    next.alerts = confirmed;
+    next.pendingAlerts = pending;
     next.muted = host.mute || [];
     next.status = next.online ? worst(next.alerts) : 'err';
 
@@ -195,25 +223,99 @@ export class Poller extends EventEmitter {
     if (next.away) {
       next.pending = false;
       next.alerts = [];
+      next.pendingAlerts = [];
       next.status = 'away';
     }
 
     const before = prev?.status;
     this.state.set(host.id, next);
     this.pushHistory(host.id, next);
-
-    // Only transitions are events. A host that has been down for an hour is
-    // not news every ten seconds.
-    //
-    // And for a machine that is expected to leave, leaving is not news
-    // either, and nor is coming back healthy — that is someone opening their
-    // laptop. Coming back WITH something wrong is, so away -> err still goes
-    // out, phrased as the problem it came back with.
-    const quiet = next.status === 'away' || (before === 'away' && next.status === 'ok');
-    if (before && before !== next.status && !quiet) {
-      this.emit('transition', { host: next, from: before, to: next.status });
-    }
+    this.announce(host, next, before);
     return next;
+  }
+
+  /**
+   * Split raised alerts into the ones that have held long enough to count and
+   * the ones still being waited out.
+   *
+   * An alert counts once it has been raised on `checks` consecutive polls AND
+   * the first of those was at least `ms` ago. Both, because either alone is
+   * wrong: three polls can be three seconds apart when ticks bunch up, and
+   * ninety seconds can be one slow poll. An alert that stops being raised is
+   * forgotten at once — recovery is immediate, so the page never shows a
+   * problem that is over.
+   *
+   * `unreachable` is exempt: a host that stops answering has its own, longer
+   * grace window (`graceMs`), which has already been applied by now.
+   */
+  confirm(host, raised) {
+    const ms = Number.isFinite(host.sustainMs) ? host.sustainMs : this.sustain.ms;
+    const checks = Number.isFinite(host.sustainChecks) ? host.sustainChecks : this.sustain.checks;
+    const before = this.alertClock.get(host.id) || new Map();
+    const after = new Map();
+    const confirmed = [];
+    const pending = [];
+    const t = this.now();
+    for (const a of raised) {
+      const key = alertKey(a);
+      if (after.has(key)) {                     // two alerts, one key: the first decides
+        (after.get(key).confirmed ? confirmed : pending).push(a);
+        continue;
+      }
+      const was = before.get(key);
+      const clock = {
+        since: was?.since ?? t,
+        checks: (was?.checks || 0) + 1,
+        confirmed: !!was?.confirmed,
+      };
+      if (!clock.confirmed) {
+        clock.confirmed = a.kind === 'unreachable'
+          || (clock.checks >= checks && t - clock.since >= ms);
+      }
+      after.set(key, clock);
+      if (clock.confirmed) confirmed.push(a);
+      else pending.push({ ...a, since: clock.since, checks: clock.checks, confirmsAt: clock.since + ms });
+    }
+    this.alertClock.set(host.id, after);
+    return { confirmed, pending };
+  }
+
+  /**
+   * Turn status changes into announcements — one per INCIDENT, not one per
+   * change.
+   *
+   * An incident opens when a host goes from fine (or away, or not yet known)
+   * to warn/err, and that is announced. While it is open, nothing else is,
+   * with one exception: a warn incident that becomes err is announced once
+   * more, because "degraded" and "in trouble" ask different things of you.
+   * err -> warn -> err inside one incident is silent. When the host is back
+   * to ok the incident closes, and only an incident that was announced gets a
+   * "recovered". A host that leaves (away) closes its incident silently.
+   */
+  announce(host, next, before) {
+    const to = next.status;
+    const open = this.incidents.get(host.id);
+    const bad = to === 'warn' || to === 'err';
+    const emit = (phase, from) => this.emit('transition', { host: next, from, to, phase });
+
+    if (to === 'away') {
+      this.incidents.delete(host.id);
+      return;
+    }
+    if (bad && !open) {
+      this.incidents.set(host.id, { severity: to, since: this.now() });
+      emit('open', before || 'unknown');
+      return;
+    }
+    if (bad && open && to === 'err' && open.severity === 'warn') {
+      open.severity = 'err';
+      emit('escalate', 'warn');
+      return;
+    }
+    if (to === 'ok' && open) {
+      this.incidents.delete(host.id);
+      emit('recover', open.severity);
+    }
   }
 
   pushHistory(id, h) {

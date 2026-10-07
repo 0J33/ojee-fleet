@@ -52,6 +52,34 @@ export const LIMITS = {
 };
 
 /**
+ * How long a problem has to hold before it is one.
+ *
+ * Every alert except `unreachable` (which has its own grace window) has to be
+ * raised on 3 consecutive polls spanning at least 90 seconds before it can
+ * colour a host, and therefore before it can reach Discord or a phone.
+ *
+ * Why those numbers, from what disinteg actually does: its units restart with
+ * RestartSec=5s, and a deploy or a crash is a stop, five seconds, then a start
+ * that takes anything from one second (node) to half a minute (gunicorn
+ * loading FastF1). That is two, sometimes three, 10-second polls of "down" for
+ * something that fixed itself. 90 s clears the slowest of those with a
+ * margin, while a service that is really dead is still reported within two
+ * minutes. Recovery does not wait at all.
+ *
+ * FLEET_SUSTAIN_MS / FLEET_SUSTAIN_CHECKS, or per host `sustainMs` /
+ * `sustainChecks` (HOST_<ID>_SUSTAIN_MS), override it.
+ */
+export const HYSTERESIS = { ms: 90_000, checks: 3 };
+
+/**
+ * What makes two alerts on consecutive polls "the same alert". Not the text:
+ * "memory at 94%" and "memory at 95%" are one problem. An alert may carry its
+ * own `key`; otherwise it is its kind plus its text with the numbers taken out.
+ */
+export const alertKey = (a) => a.key
+  || `${a.kind}:${String(a.text || '').replace(/\d+(\.\d+)?/g, '#')}`;
+
+/**
  * Every alert carries a `kind`. It is what makes an alert addressable — the
  * thing a host config can name to say "not on this machine". Without it the
  * only ways to silence a rule are to raise its threshold everywhere or to
@@ -103,8 +131,12 @@ export function deriveAlerts(h) {
   for (const d of h.disks || []) {
     const p = Number.isFinite(d.pct) ? d.pct : pct(d.used, d.total);
     if (!Number.isFinite(p)) continue;
-    if (p >= LIMITS.diskCritPct) add('disk-critical', 'err', `${h.name} ${d.label} is ${Math.round(p)}% full`, 'almost out of space');
-    else if (p >= LIMITS.diskPct) add('disk', 'warn', `${h.name} ${d.label} is ${Math.round(p)}% full`);
+    // One key for both levels: a disk going from 95% to 97% is the same
+    // problem getting worse, not a new one that has to be waited out again.
+    const key = `disk:${d.mount || d.label}`;
+    const text = `${h.name} ${d.label} is ${Math.round(p)}% full`;
+    if (p >= LIMITS.diskCritPct) out.push({ kind: 'disk-critical', severity: 'err', text, hint: 'almost out of space', key });
+    else if (p >= LIMITS.diskPct) out.push({ kind: 'disk', severity: 'warn', text, key });
   }
 
   const memPct = h.mem ? (Number.isFinite(h.mem.pct) ? h.mem.pct : pct(h.mem.used, h.mem.total)) : UNKNOWN;
@@ -122,12 +154,17 @@ export function deriveAlerts(h) {
   }
 
   for (const s of h.services || []) {
-    // `downFor` is filled in by the poller, which is the only thing that can
-    // see two samples. An adapter that does not report it gets the old
-    // behaviour: alert on the first miss.
-    if (s.ok === false && (s.downFor ?? 2) >= 2) {
-      add('service-down', s.critical ? 'err' : 'warn',
-        `${s.name} is not running on ${h.name}`, s.detail || undefined);
+    // Raised on every poll the service is down; whether it has been down
+    // long enough to COUNT is the poller's call (see HYSTERESIS), because
+    // only the poller can see more than one sample.
+    if (s.ok === false) {
+      out.push({
+        kind: 'service-down',
+        severity: s.critical ? 'err' : 'warn',
+        text: `${s.name} is not running on ${h.name}`,
+        hint: s.detail || undefined,
+        key: `service-down:${s.id || s.name}`,
+      });
     }
   }
 
@@ -172,3 +209,68 @@ export const fmtUptime = (s) => {
   if (h) return `${h}h ${m}m`;
   return `${m}m`;
 };
+
+/**
+ * /etc/os-release, properly: values may be double- or single-quoted or bare,
+ * may contain escaped quotes, and comment lines are allowed. PRETTY_NAME is
+ * what the distribution wants shown ("Zorin OS 18.1", "Ubuntu 24.04.1 LTS");
+ * without it, NAME plus VERSION (or VERSION_ID). Null when neither exists —
+ * never "Linux", which is true of every machine here and says nothing.
+ */
+export function parseOsRelease(text) {
+  const kv = {};
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if (v.length >= 2 && (v[0] === '"' || v[0] === "'") && v.at(-1) === v[0]) v = v.slice(1, -1);
+    kv[m[1]] = v.replace(/\\(["'$`\\])/g, '$1');
+  }
+  const pretty = kv.PRETTY_NAME?.trim();
+  if (pretty && pretty !== 'Linux') return pretty;
+  const composed = [kv.NAME, kv.VERSION || kv.VERSION_ID].filter(Boolean).join(' ').trim();
+  return composed || null;
+}
+
+/**
+ * The best OS name among several candidates. A bare kernel string
+ * ("Linux 7.0.0-31-generic", "Linux") is what platform.system() gives you and
+ * is only used when nothing names the distribution.
+ */
+export function pickOs(...candidates) {
+  const list = candidates.map((c) => (typeof c === 'string' ? c.trim() : '')).filter(Boolean);
+  return list.find((c) => !/^linux\b/i.test(c)) || list[0] || null;
+}
+
+/** /dev/sda1 -> sda, /dev/nvme0n1p2 -> nvme0n1, /dev/mmcblk0p1 -> mmcblk0. */
+export function parentDisk(dev) {
+  const name = String(dev || '').replace(/^\/dev\//, '');
+  if (!name) return null;
+  const m = name.match(/^(nvme\d+n\d+|mmcblk\d+)(p\d+)?$/);
+  if (m) return m[1];
+  const sd = name.match(/^((?:s|v|xv|h)d[a-z]+)\d*$/);
+  if (sd) return sd[1];
+  return name;
+}
+
+/**
+ * Join a host's mounted filesystems to its physical disks: each filesystem
+ * gets the model of the disk it lives on, and each disk says whether anything
+ * is mounted from it. A disk with nothing mounted is still listed — a spare
+ * SSD or an enclosure that was plugged in but not mounted is exactly what you
+ * would want to find on this page.
+ */
+export function joinStorage(disks, drives) {
+  const byName = new Map((drives || []).map((d) => [d.device, d]));
+  const used = new Set();
+  const fs = (disks || []).map((d) => {
+    const parent = d.disk || parentDisk(d.device);
+    if (parent) used.add(parent);
+    const drive = byName.get(parent);
+    return { ...d, disk: parent || null, model: d.model || drive?.model || null };
+  });
+  const dr = (drives || []).map((d) => ({ ...d, mounted: used.has(d.device) }));
+  return { disks: fs, drives: dr };
+}

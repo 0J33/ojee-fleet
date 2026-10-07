@@ -12,7 +12,9 @@
  * without disk health.
  */
 
-import { fmtBytes, num, offlineHost, pct } from '../normalize.js';
+import {
+  fmtBytes, joinStorage, num, offlineHost, pct, pickOs,
+} from '../normalize.js';
 
 const TIMEOUT_MS = 6000;
 
@@ -113,7 +115,10 @@ export async function probe(host) {
     online: true,
     error: null,
     at: Date.now(),
-    os: stats.os || hardware?.os || null,
+    // /api/stats.os is platform.system() + release — "Linux 7.0.0-31-generic",
+    // true of every machine here. /api/hardware reads os-release and says
+    // "Ubuntu 24.04.1 LTS", which is the answer to the question being asked.
+    os: pickOs(hardware?.os, stats.os),
     machine: hardware?.model || hardware?.board || null,
     uptime: num(stats.uptime),
     cpu: {
@@ -141,22 +146,34 @@ export async function probe(host) {
       rx: num(stats.network.recv_per_s), tx: num(stats.network.sent_per_s),
     } : null,
     battery: null,
-    disks: mounts.length ? mounts.map((d) => ({
-      label: d.mount,
-      mount: d.mount,
-      device: d.device || null,
-      fstype: d.fstype || null,
-      remote: !!d.remote,
-      used: num(d.used), total: num(d.total),
-      pct: num(d.percent) ?? pct(d.used, d.total),
-    })) : (stats.disk ? [{
-      label: '/', mount: '/', used: num(stats.disk.used), total: num(stats.disk.total),
-      pct: num(stats.disk.percent),
-    }] : []),
+    ...joinStorage(
+      mounts.length ? mounts.map((d) => ({
+        label: d.mount,
+        mount: d.mount,
+        device: d.device || null,
+        fstype: d.fstype || null,
+        remote: !!d.remote,
+        used: num(d.used), total: num(d.total), free: num(d.free),
+        pct: num(d.percent) ?? pct(d.used, d.total),
+      })) : (stats.disk ? [{
+        label: '/', mount: '/', used: num(stats.disk.used), total: num(stats.disk.total),
+        pct: num(stats.disk.percent),
+      }] : []),
+      // The physical disks, make and model — including ones nothing is
+      // mounted from (disinteg's spare 128 GB SSD).
+      (hardware?.disks || []).map((d) => ({
+        device: d.name, model: d.model || null, size: num(d.size),
+        kind: d.kind || null, tempC: null,
+      })).filter((d) => d.device),
+    ),
     services: Object.entries(services || {}).map(([id, s]) => ({
       id,
       name: s.desc || id,
-      ok: !!s.active,
+      // `unit_state: "unknown"` is the dashboard's way of saying its own check
+      // threw (a systemctl call that timed out on a busy box). That is "we did
+      // not find out", not "it is down" — null, which the poller treats as
+      // "same as last time" instead of as an outage.
+      ok: s.unit_state === 'unknown' ? null : !!s.active,
       detail: s.unit_state && s.unit_state !== 'active' ? s.unit_state : null,
       memory: num(s.memory),
       critical: !!s.critical,

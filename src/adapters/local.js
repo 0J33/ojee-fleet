@@ -26,7 +26,9 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { num, offlineHost, pct } from '../normalize.js';
+import {
+  joinStorage, num, offlineHost, parseOsRelease, pct,
+} from '../normalize.js';
 
 const execFileP = promisify(execFile);
 
@@ -128,7 +130,10 @@ async function filesystems() {
       const total = s.blocks * s.bsize;
       if (!total) continue;
       const free = s.bavail * s.bsize;
-      const used = total - free;
+      // Used is what is allocated (blocks - bfree), not total - available:
+      // the root-reserved 5% is neither used nor available to you, and
+      // counting it as used made an empty disk read 5% full.
+      const used = total - s.bfree * s.bsize;
       out.push({
         label: entry.mount,
         mount: entry.mount,
@@ -137,11 +142,41 @@ async function filesystems() {
         remote: entry.fstype?.startsWith('fuse'),
         used,
         total,
+        free,
         pct: pct(used, total),
       });
     } catch { /* a mount we cannot stat is a mount we do not report */ }
   }
   return out.sort((a, b) => b.total - a.total);
+}
+
+/* ── physical disks ────────────────────────────────────────────────────── */
+
+/**
+ * Whole disks from /sys/block, with make and model. sysfs is not namespaced
+ * for block devices, so the container's own /sys already lists the host's
+ * disks; the bind under HOST_ROOT is tried first anyway.
+ */
+async function physicalDisks() {
+  for (const base of [`${HOST_ROOT}/sys/block`, '/sys/block']) {
+    let names;
+    try { names = await fsp.readdir(base); } catch { continue; }
+    const out = [];
+    for (const name of names) {
+      if (/^(loop|ram|zram|dm-|md|sr|fd|nbd)/.test(name)) continue;
+      const size = Number(await readOr(`${base}/${name}/size`, '0')) * 512;
+      if (!size) continue;
+      const model = ((await readOr(`${base}/${name}/device/model`, ''))
+        || (await readOr(`${base}/${name}/device/name`, '')) || '').trim() || null;
+      const rot = (await readOr(`${base}/${name}/queue/rotational`, ''))?.trim();
+      out.push({
+        device: name, model, size, tempC: null,
+        kind: rot === '1' ? 'HDD' : rot === '0' ? 'SSD' : null,
+      });
+    }
+    return out.sort((a, b) => a.device.localeCompare(b.device));
+  }
+  return [];
 }
 
 /* ── temperature ───────────────────────────────────────────────────────── */
@@ -301,7 +336,7 @@ function parseNetDev(text) {
 
 export async function probe(host) {
   try {
-    const [stat, meminfo, uptimeRaw, loadRaw, netRaw, disks, tempC, g, svcs] = await Promise.all([
+    const [stat, meminfo, uptimeRaw, loadRaw, netRaw, fsList, tempC, g, svcs, drives] = await Promise.all([
       readOr(`${HOST_ROOT}/proc/stat`, '') ?? readOr('/proc/stat', ''),
       readOr('/proc/meminfo', ''),
       readOr('/proc/uptime', ''),
@@ -311,7 +346,9 @@ export async function probe(host) {
       cpuTemp(),
       gpu(),
       containers(),
+      physicalDisks(),
     ]);
+    const storage = joinStorage(fsList, drives);
 
     const now = Date.now();
     const cpuNow = parseCpuLine(stat);
@@ -339,8 +376,8 @@ export async function probe(host) {
     const model = ((await readOr('/proc/cpuinfo', '')) || '')
       .split('\n').find((l) => l.startsWith('model name'))?.split(':')[1]?.trim() || null;
     const osRelease = await readOr(`${HOST_ROOT}/etc/os-release`, '');
-    const osName = osRelease?.split('\n').find((l) => l.startsWith('PRETTY_NAME='))
-      ?.split('=')[1]?.replace(/"/g, '') || null;
+    const osName = parseOsRelease(osRelease)
+      || parseOsRelease(await readOr(`${HOST_ROOT}/usr/lib/os-release`, ''));
 
     return {
       id: host.id,
@@ -367,7 +404,8 @@ export async function probe(host) {
       gpu: g,
       net,
       battery: null,
-      disks,
+      disks: storage.disks,
+      drives: storage.drives,
       services: svcs,
       alerts: [],
       links: host.links || [],

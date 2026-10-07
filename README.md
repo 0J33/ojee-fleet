@@ -121,9 +121,29 @@ reported as stopped ones:
 What remains is: it is running, or it is stopped and its restart policy says it should not be.
 That last check costs one inspect per non-running container, which is normally zero.
 
-A service also has to be missed **twice in a row** before it is an alert. Restarting a container
-takes a few seconds and the poll is every ten, so a single miss is usually a restart in progress —
-including one you started a moment ago.
+### Hysteresis — a problem has to hold before it is one
+
+Every alert except `unreachable` (which has the grace window above) has to be raised on **3
+consecutive polls spanning at least 90 seconds** before it counts. Until then it is listed under
+*Waiting to confirm* on the Alerts view and changes nothing — no colour, no status, no ping.
+Recovery does not wait: the first good poll clears it.
+
+The numbers come from what disinteg actually does. Its units restart with `RestartSec=5s`; a deploy,
+an OOM kill or the Terraria watchdog is a stop, five seconds, and a start that takes from one second
+(node) to half a minute (gunicorn loading FastF1). That is two or three 10-second polls of "down"
+for something that fixed itself. The old rule — two misses in a row — fired on exactly those. 90 s
+clears the slowest of them; a service that is really dead is still reported inside two minutes.
+
+Both conditions, because either alone is wrong: three polls can be three seconds apart when ticks
+bunch up, and 90 seconds can be one slow poll. Alerts are matched across polls by a key, not their
+text, so "memory at 94%" and "memory at 95%" are one problem waiting, not two.
+
+A check the host could not complete is not a failure: disinteg's dashboard reports
+`unit_state: "unknown"` when its own `systemctl` call times out, and that keeps the service's last
+known state instead of counting as a miss.
+
+`FLEET_SUSTAIN_MS` / `FLEET_SUSTAIN_CHECKS`, or per host `sustainMs` / `sustainChecks`
+(`HOST_<ID>_SUSTAIN_MS`), change it.
 
 ### Muting
 
@@ -166,6 +186,15 @@ therefore it is throttling" is an alert that is permanently on. Whether it is th
 question about two samples, which only the poller can see — so the adapter reports the counter raw
 and the poller decides.
 
+**Storage is filesystems AND disks.** Every mounted filesystem is listed with its usage, device,
+type and the model of the disk it lives on; every physical disk with nothing mounted from it (a
+spare SSD, an enclosure plugged in but not mounted) is listed under it as *not mounted*. Network
+mounts are left out on the laptop, where an sshfs whose server went away would hang the sampler.
+
+**The OS is read from os-release, not the kernel.** `PRETTY_NAME` ("Zorin OS 18.1"), else `NAME` +
+`VERSION`. A string like "Linux 7.0.0-31-generic" is true of every machine here and is only shown
+when nothing names the distribution.
+
 **One filesystem, many mount points.** disinteg has `/dev/sda1` mounted at `/`, `/boot`, `/etc`,
 `/root`, `/tmp`, `/usr` and `/var/tmp`, all reporting the same 4.6%. Seven rows that say one thing
 bury the one mount that is actually filling up; the shortest path per device wins.
@@ -189,11 +218,13 @@ that explains what is wrong.
 Point `DISCORD_WEBHOOK` at a webhook and state transitions are posted to it. Two rules, both about
 not becoming noise:
 
-- Only transitions. "disinteg went from ok to err" is news; "disinteg is still err" is not, and a
-  monitor that repeats itself every ten seconds gets muted — strictly worse than one that never
-  sent anything.
-- Recoveries too. A pager that only tells you about breakage leaves you refreshing a page to find
-  out whether it is over.
+- **One message per incident.** An incident opens when a host goes from fine to warn/err, and that
+  is announced. While it is open nothing else is — err → warn → err is silent — with one exception:
+  a warn incident that becomes err is told once more, because "degraded" and "in trouble" ask
+  different things of you.
+- **A recovery only for a break you were told about.** When the host is back to ok the incident
+  closes with a "healthy again" — but only if its opening was actually sent. A "recovered" about
+  something you never heard was broken is just a second blip report.
 
 Mounted in the console, the same transitions also arrive as SSE `notify` events, which the phone
 app turns into local notifications.
@@ -224,6 +255,9 @@ private deployment repo can commit it. Credentials come from the environment:
 | `FLEET_DOWN_GRACE_MS` | default 300000 — how long a host may be missing before it is news |
 | `HOST_<ID>_GRACE_MS` | the same, for one host |
 | `HOST_<ID>_ROAMING` | `1` for a machine that leaves — its absence is `away`, not an alert |
+| `FLEET_SUSTAIN_MS` | default 90000 — how long an alert must hold before it counts |
+| `FLEET_SUSTAIN_CHECKS` | default 3 — and over how many consecutive polls |
+| `HOST_<ID>_SUSTAIN_MS` | the same, for one host |
 | `PORT` / `BIND` | default `0.0.0.0:8400` |
 
 Mounted in a console, add it to `config/console.json` like any other module.
