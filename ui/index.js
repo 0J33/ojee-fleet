@@ -332,10 +332,11 @@ function viewHosts(d) {
   const driveRow = (dv) => el('div', { class: 'fl-row fl-drive' },
     el('span', { class: 'fl-drive-dev' }, dv.device),
     el('span', { class: 'fl-drive-model meta', title: dv.model || '' },
-      [dv.model || 'unknown', dv.kind, fsList.length && dv.mounted === false ? 'not mounted' : null]
-        .filter(Boolean).join(' · ')),
+      [dv.model || 'unknown', dv.kind].filter(Boolean).join(' · ')),
     el('span', { class: 'fl-drive-size tnum' }, fmtBytes(dv.size)),
-    Number.isFinite(dv.tempC) ? el('span', { class: 'meta tnum' }, fmtTemp(dv.tempC)) : el('span'));
+    fsList.length && dv.mounted === false
+      ? el('span', { class: 'label' }, 'not mounted')
+      : Number.isFinite(dv.tempC) ? el('span', { class: 'meta tnum' }, fmtTemp(dv.tempC)) : el('span'));
   const spare = fsList.length ? (current.drives || []).filter((dv) => dv.mounted === false) : (current.drives || []);
   const disks = el('section', { class: 'panel stack' },
     el('h3', { class: 'h3' }, fsList.length ? 'Filesystems' : 'Drives'),
