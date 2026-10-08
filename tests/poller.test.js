@@ -369,6 +369,16 @@ test('the notifier', async (t) => {
     assert.match(sent[1].embeds[0].title, /healthy again/);
   });
 
+  await t.test('event() decides without a webhook (the console routes it)', async () => {
+    const n = new Notifier({ webhook: '' });
+    const host = { id: 'y', name: 'box', alerts: [{ severity: 'err', text: 'disk full' }] };
+    assert.equal(n.event({ host, from: 'unknown', to: 'err' }), null);
+    assert.match(n.event({ host, from: 'ok', to: 'err' }).title, /trouble/);
+    assert.equal(n.event({ host, from: 'ok', to: 'err' }), null, 'cooldown');
+    assert.match(n.event({ host, from: 'err', to: 'ok' }).title, /healthy again/);
+    assert.equal(n.event({ host: { ...host, id: 'z' }, from: 'err', to: 'ok' }), null, 'no recovery for a break never announced');
+  });
+
   await t.test('a webhook that is down never throws', async () => {
     const n = mk({ fetchImpl: async () => { throw new Error('network'); } });
     assert.equal(await n.send({ title: 't', description: 'd', color: 1 }), false);

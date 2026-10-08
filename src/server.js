@@ -42,7 +42,48 @@ const poller = new Poller({
 }).start();
 
 const notifier = new Notifier(config.notify);
-poller.on('transition', (t) => { notifier.transition(t); });
+
+/* ── notifications ──────────────────────────────────────────────────────
+   A transition worth telling (Notifier.event decides) goes out as a
+   `notify` event on /api/events with id `fleet.host`. The console routes it
+   — app, Discord, quiet hours — from Settings → Notifications. Only when no
+   console has been listening for two minutes does this module post to its
+   own Discord webhook, so an incident is never lost because the console is
+   down; the console's settings (pushed to /api/notify/prefs) still apply. */
+
+const NOTIFY_TYPES = [{
+  id: 'fleet.host', label: 'A machine degraded, in trouble, or recovered',
+  description: 'One message per incident, when a machine changes state and stays changed; a recovery only for a break that was announced.',
+  severity: 'warn', defaultChannels: ['app', 'discord'], view: 'hosts', cooldownMin: 0,
+}];
+const recentNotify = [];
+const routers = new Set();
+let routerGoneAt = Date.now();
+let notifyPrefs = null;
+const streams = new Set();
+
+poller.on('transition', (t) => {
+  const ev = notifier.event(t);
+  if (!ev) return;
+  const n = {
+    id: 'fleet.host', title: ev.title, body: ev.description,
+    tag: `fleet:${t.host.id}:${t.to}`,
+    severity: t.to === 'err' ? 'critical' : t.to === 'ok' ? 'info' : 'warn',
+    view: 'hosts', at: Date.now(),
+  };
+  recentNotify.push(n);
+  while (recentNotify.length > 50) recentNotify.shift();
+  for (const res of streams) res.write(`event: notify\ndata: ${JSON.stringify(n)}\n\n`);
+  const routed = routers.size > 0 || Date.now() - routerGoneAt < 120_000;
+  const wanted = notifyPrefs?.types?.['fleet.host']?.discord !== false;
+  if (!routed && wanted && notifier.enabled) notifier.send(ev).catch(() => {});
+});
+
+app.post('/api/notify/prefs', (req, res) => {
+  if (!req.body || typeof req.body.types !== 'object') return res.status(400).json({ error: 'types is required' });
+  notifyPrefs = { quiet: req.body.quiet || null, types: req.body.types };
+  res.json({ ok: true });
+});
 
 /* ── the manifest ───────────────────────────────────────────────────────── */
 
@@ -65,7 +106,8 @@ app.get('/module.json', (req, res) => {
     views: VIEWS,
     ui: '/ui/index.js',
     health: '/api/health',
-    capabilities: ['summary', 'sse'],
+    capabilities: ['summary', 'sse', 'notify'],
+    notifications: NOTIFY_TYPES,
   });
 });
 
@@ -331,17 +373,13 @@ app.get('/api/events', (req, res) => {
   send('state', poller.snapshot());
 
   const onUpdate = (s) => send('state', s);
-  // Transitions are already one per incident (see Poller.announce), so the
-  // phone hears exactly what Discord does.
-  const onTransition = ({ host, from, to }) => {
-    send('notify', {
-      title: to === 'ok' ? `${host.name} recovered` : `${host.name} is ${to === 'err' ? 'in trouble' : 'degraded'}`,
-      body: (host.alerts || [])[0]?.text || `was ${from}`,
-      tag: `fleet:${host.id}:${to}`,
-    });
-  };
   poller.on('update', onUpdate);
-  poller.on('transition', onTransition);
+  // The console's own subscription (?router=1) catches up on what it missed.
+  const router = req.query.router === '1';
+  const since = Number(req.query.since);
+  if (since > 0) for (const n of recentNotify) if (n.at > since && Date.now() - n.at < 30 * 60_000) send('notify', n);
+  streams.add(res);
+  if (router) routers.add(res);
 
   // Proxies drop a stream that says nothing for long enough; a comment is not
   // an event, so this costs the client nothing to ignore.
@@ -350,7 +388,8 @@ app.get('/api/events', (req, res) => {
   req.on('close', () => {
     clearInterval(beat);
     poller.off('update', onUpdate);
-    poller.off('transition', onTransition);
+    streams.delete(res);
+    if (routers.delete(res) && !routers.size) routerGoneAt = Date.now();
   });
 });
 

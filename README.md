@@ -226,8 +226,12 @@ not becoming noise:
   closes with a "healthy again" — but only if its opening was actually sent. A "recovered" about
   something you never heard was broken is just a second blip report.
 
-Mounted in the console, the same transitions also arrive as SSE `notify` events, which the phone
-app turns into local notifications.
+Mounted in the console, the console routes these (Settings → Notifications, type `fleet.host`):
+each transition is a `notify` event on `/api/events` (`?since=` replays the last 30 minutes to a
+console that reconnects), and the console sends it to the app and/or Discord with quiet hours
+and cooldowns. Fleet posts to `DISCORD_WEBHOOK` itself only when no console has been listening
+(`?router=1`) for two minutes — so an incident still gets out while the console is down — and
+then still honours the console's choice for Discord (pushed to `POST /api/notify/prefs`).
 
 ---
 

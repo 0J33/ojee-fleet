@@ -39,17 +39,28 @@ export class Notifier {
     return true;
   }
 
-  async transition({ host, from, to }) {
+  async transition(t) {
     if (!this.enabled) return false;
+    const ev = this.event(t);
+    return ev ? this.send(ev) : false;
+  }
+
+  /**
+   * The message for a transition, or null when the rules above say it is not
+   * news. Kept apart from sending: the console routes these now (Settings →
+   * Notifications), and this module only posts to Discord itself when the
+   * console is not listening.
+   */
+  event({ host, from, to }) {
     // Recovering from "we have not asked yet" is not an event.
-    if (from === 'unknown' || !from) return false;
+    if (from === 'unknown' || !from) return null;
     if (to === 'ok') {
       // Recovery is never rate-limited, and never sent for a break that was not.
-      if (!this.announced.has(host.id)) return false;
+      if (!this.announced.has(host.id)) return null;
       this.announced.delete(host.id);
     } else {
       const tag = `${host.id}:${to}`;
-      if (!this.allow(tag)) return false;
+      if (!this.allow(tag)) return null;
       this.announced.add(host.id);
     }
 
@@ -60,12 +71,12 @@ export class Notifier {
     const lines = (host.alerts || []).slice(0, 6)
       .map((a) => `• ${a.text}${a.hint ? ` — ${a.hint}` : ''}`);
 
-    return this.send({
+    return {
       title,
       description: lines.length ? lines.join('\n') : (worstAlert?.text || 'No details reported.'),
       color: COLORS[to] ?? COLORS.unknown,
       footer: `${host.role || host.kind} · was ${from}`,
-    });
+    };
   }
 
   async send({ title, description, color, footer }) {
