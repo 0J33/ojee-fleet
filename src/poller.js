@@ -20,18 +20,20 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { HYSTERESIS, alertKey, applyMutes, deriveAlerts, worst } from './normalize.js';
+import { HYSTERESIS, HYSTERESIS_BY_KIND, alertKey, applyMutes, deriveAlerts, worst } from './normalize.js';
 
 import * as tegAdapter from './adapters/teg.js';
 import * as agentAdapter from './adapters/agent.js';
 import * as loqAdapter from './adapters/loq.js';
 import * as localAdapter from './adapters/local.js';
+import * as satelliteAdapter from './adapters/satellite.js';
 
 const ADAPTERS = {
   teg: tegAdapter,
   agent: agentAdapter,
   loq: loqAdapter,
   local: localAdapter,
+  satellite: satelliteAdapter,
 };
 
 /**
@@ -63,6 +65,9 @@ export class Poller extends EventEmitter {
     // How long, and over how many polls, an alert has to hold before it
     // counts. See `confirm()` below and HYSTERESIS in normalize.js.
     this.sustain = { ...HYSTERESIS, ...(sustain || {}) };
+    // Per-kind holds come with the default; a caller that sets its own
+    // sustain (the tests) says its own byKind, or gets none.
+    this.byKind = sustain === HYSTERESIS ? HYSTERESIS_BY_KIND : (sustain?.byKind || {});
     this.intervalMs = intervalMs;
     this.historyLength = historyLength;
     this.now = now;
@@ -288,13 +293,16 @@ export class Poller extends EventEmitter {
         checks: (was?.checks || 0) + 1,
         confirmed: !!was?.confirmed,
       };
+      // A kind with its own, longer hold (HYSTERESIS_BY_KIND) takes the longer
+      // of that and the host's.
+      const kms = Math.max(ms, this.byKind[a.kind]?.ms ?? 0);
       if (!clock.confirmed) {
         clock.confirmed = a.kind === 'unreachable'
-          || (clock.checks >= checks && t - clock.since >= ms);
+          || (clock.checks >= checks && t - clock.since >= kms);
       }
       after.set(key, clock);
       if (clock.confirmed) confirmed.push(a);
-      else pending.push({ ...a, since: clock.since, checks: clock.checks, confirmsAt: clock.since + ms });
+      else pending.push({ ...a, since: clock.since, checks: clock.checks, confirmsAt: clock.since + kms });
     }
     this.alertClock.set(host.id, after);
     return { confirmed, pending };

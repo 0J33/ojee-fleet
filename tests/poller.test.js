@@ -402,3 +402,21 @@ test('a probe that never answers fails at its deadline and does not freeze the f
   assert.equal(callCount, 2, 'and it did');
   delete ADAPTERS.hang;
 });
+
+test('a failed unit has to stay failed for half an hour before it is an alert', async () => {
+  // A timer's oneshot that fails one run stays "failed" until its next run:
+  // longer than the usual 90 s, shorter than this.
+  let t = 0;
+  const failed = healthy({ alerts: [{ kind: 'unit-failed', severity: 'err', text: 'fwupd-refresh.service failed' }] });
+  scripted = [failed]; callCount = 0;
+  const p = new Poller({ hosts: [HOST], intervalMs: 10_000, historyLength: 5, now: () => t, sustain: { ms: 90_000, checks: 3, byKind: { 'unit-failed': { ms: 30 * 60_000 } } } });
+  for (const at of [0, 60_000, 5 * 60_000, 20 * 60_000]) { t = at; await p.probeOne(HOST); }
+  assert.equal(p.get('box').alerts.length, 0, 'not after 20 minutes');
+  assert.equal(p.get('box').pendingAlerts.length, 1, 'but shown as waiting');
+  assert.equal(p.get('box').status, 'ok');
+  t = 31 * 60_000; await p.probeOne(HOST);
+  assert.equal(p.get('box').alerts.length, 1, 'after 30 it is one');
+  // The default poller carries the same hold.
+  const d = new Poller({ hosts: [HOST] });
+  assert.equal(d.byKind['unit-failed'].ms, 30 * 60_000);
+});

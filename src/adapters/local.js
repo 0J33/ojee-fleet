@@ -43,6 +43,37 @@ let prev = { cpu: null, net: null, at: 0 };
 const read = async (p) => fsp.readFile(p, 'utf8');
 const readOr = async (p, fallback = null) => read(p).catch(() => fallback);
 
+/* ── battery ───────────────────────────────────────────────────────────── */
+
+/**
+ * A laptop's battery, from /sys/class/power_supply: charge, what it is doing,
+ * the watts going in or out, and health (full charge now against new). Null
+ * on a machine with none (the HP box), which is the truth there.
+ */
+async function battery() {
+  const base = `${HOST_ROOT}/sys/class/power_supply`;
+  let names = [];
+  try { names = await fsp.readdir(base); } catch { return null; }
+  for (const n of names.filter((x) => /^BAT/i.test(x)).sort()) {
+    const r = (f) => readOr(path.join(base, n, f), null).then((v) => (v == null ? null : v.trim()));
+    const [cap, status, power, eFull, eDesign] = await Promise.all(
+      ['capacity', 'status', 'power_now', 'energy_full', 'energy_full_design'].map(r),
+    );
+    const pctNow = num(Number(cap));
+    if (pctNow == null) continue;
+    const st = String(status || '').toLowerCase();
+    return {
+      pct: pctNow,
+      // "Not charging" is a full battery on AC held by charge limiting: not
+      // draining, so not "discharging" either.
+      state: st === 'charging' ? 'charging' : st === 'discharging' ? 'discharging' : st === 'full' || st === 'not charging' ? 'plugged in' : st || null,
+      watts: power != null && Number(power) > 0 ? Math.round(Number(power) / 1e5) / 10 : null,
+      health: eFull && eDesign && Number(eDesign) > 0 ? Math.round((Number(eFull) / Number(eDesign)) * 1000) / 10 : null,
+    };
+  }
+  return null;
+}
+
 /* ── cpu ───────────────────────────────────────────────────────────────── */
 
 function parseCpuLine(text) {
@@ -139,7 +170,9 @@ async function filesystems() {
         mount: entry.mount,
         device: entry.device,
         fstype: entry.fstype,
-        remote: entry.fstype?.startsWith('fuse'),
+        // A share from another machine. Not `fuseblk`: that is ntfs-3g on a
+        // disk in this machine (the laptop's SSD), which is as local as ext4.
+        remote: NETWORK_FS.test(entry.fstype || ''),
         used,
         total,
         free,
@@ -149,6 +182,9 @@ async function filesystems() {
   }
   return out.sort((a, b) => b.total - a.total);
 }
+
+/** Filesystems that live on another machine. */
+const NETWORK_FS = /^(fuse\.(sshfs|rclone|s3fs|gcsfuse|davfs2?)|nfs4?|cifs|smb3?|9p|ceph|glusterfs)$/;
 
 /* ── physical disks ────────────────────────────────────────────────────── */
 
@@ -336,7 +372,7 @@ function parseNetDev(text) {
 
 export async function probe(host) {
   try {
-    const [stat, meminfo, uptimeRaw, loadRaw, netRaw, fsList, tempC, g, svcs, drives] = await Promise.all([
+    const [stat, meminfo, uptimeRaw, loadRaw, netRaw, fsList, tempC, g, svcs, drives, bat] = await Promise.all([
       readOr(`${HOST_ROOT}/proc/stat`, '') ?? readOr('/proc/stat', ''),
       readOr('/proc/meminfo', ''),
       readOr('/proc/uptime', ''),
@@ -347,6 +383,7 @@ export async function probe(host) {
       gpu(),
       containers(),
       physicalDisks(),
+      battery(),
     ]);
     const storage = joinStorage(fsList, drives);
 
@@ -403,7 +440,7 @@ export async function probe(host) {
       swap,
       gpu: g,
       net,
-      battery: null,
+      battery: bat ? { pct: bat.pct, state: bat.state, watts: bat.watts, health: bat.health } : null,
       disks: storage.disks,
       drives: storage.drives,
       services: svcs,

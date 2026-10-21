@@ -72,6 +72,16 @@ export const LIMITS = {
 export const HYSTERESIS = { ms: 90_000, checks: 3 };
 
 /**
+ * Kinds that have to hold longer than that. A failed systemd unit is most
+ * often a timer's oneshot that failed one run (a download that timed out,
+ * fwupd-refresh on disinteg, 2026-10-21) and is fine again at its next run;
+ * it stays "failed" until then, which outlasts 90 s every time, so each such
+ * run was an alert, a ping and a red card that then cleared by itself. Thirty
+ * minutes of being failed is a unit that is actually broken.
+ */
+export const HYSTERESIS_BY_KIND = { 'unit-failed': { ms: 30 * 60_000 } };
+
+/**
  * What makes two alerts on consecutive polls "the same alert". Not the text:
  * "memory at 94%" and "memory at 95%" are one problem. An alert may carry its
  * own `key`; otherwise it is its kind plus its text with the numbers taken out.
