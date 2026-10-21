@@ -384,3 +384,21 @@ test('the notifier', async (t) => {
     assert.equal(await n.send({ title: 't', description: 'd', color: 1 }), false);
   });
 });
+
+test('a probe that never answers fails at its deadline and does not freeze the fleet', async () => {
+  // One host whose probe hangs for ever, one that answers. Before the
+  // deadline, the round waited on the first for ever and the second was
+  // never sampled again either.
+  ADAPTERS.hang = { probe: () => new Promise(() => {}) };
+  scripted = [healthy()]; callCount = 0;
+  const stuck = { id: 'stuck', name: 'stuck', kind: 'hang', probeTimeoutMs: 50 };
+  const p = new Poller({ hosts: [stuck, HOST], intervalMs: 10_000, historyLength: 5, sustain: NOW });
+  await p.tick();
+  assert.equal(p.get('stuck').online, false);
+  assert.match(p.get('stuck').error, /no answer within/);
+  assert.equal(p.get('box').online, true);
+  assert.equal(p.busy, false, 'the round finished, so the next one can run');
+  await p.tick();
+  assert.equal(callCount, 2, 'and it did');
+  delete ADAPTERS.hang;
+});

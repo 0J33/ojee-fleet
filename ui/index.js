@@ -185,11 +185,24 @@ a.hint ? el('span', { class: 'fl-alert-hint meta' }, a.hint) : null);
 
 /* ── views ───────────────────────────────────────────────────────────── */
 
+/** A mount point as a short name for a card: "/media/ojee/NVME" is "NVME". */
+const shortMount = (m) => {
+  const x = /^\/(?:media|run\/media)\/[^/]+\/(.+)$/.exec(m || '') || /^\/mnt\/(.+)$/.exec(m || '');
+  return x ? x[1] : m;
+};
+
+/** The filesystems a card shows: every one this machine has on its own disks,
+    fullest first. Not the boot partitions (a few hundred MB that only the
+    installer cares about) and not a share mounted from another machine, which
+    is that machine's disk and is shown on its own card. */
+const cardDisks = (h) => (h.disks || [])
+  .filter((d) => Number.isFinite(d.pct) && !d.remote && !/^\/boot(\/|$)/.test(d.mount || d.label || ''))
+  .sort((a, b) => b.pct - a.pct);
+
 function hostCard(h) {
   const memPct = h.mem?.pct ?? null;
-  const worstDisk = (h.disks || [])
-    .filter((d) => Number.isFinite(d.pct))
-    .sort((a, b) => b.pct - a.pct)[0] || null;
+  const disks = cardDisks(h);
+  const spare = disks.length ? (h.drives || []).filter((dv) => dv.mounted === false) : [];
 
   // The whole card opens the host. Only the name was clickable, which means
   // the obvious gesture — click the machine you are looking at — did nothing
@@ -220,8 +233,10 @@ function hostCard(h) {
           : el('div', { class: 'fl-metric fl-metric--absent' },
             el('span', { class: 'label' }, 'Memory'),
             el('span', { class: 'meta' }, 'not reported')),
-        worstDisk ? bar(worstDisk.pct, `Disk ${worstDisk.label}`,
-          { text: `${fmtPct(worstDisk.pct)} · ${fmtBytes(worstDisk.total - worstDisk.used)} free` }) : null,
+        ...disks.map((d) => bar(d.pct, `Disk ${shortMount(d.mount || d.label)}`,
+          { text: `${fmtPct(d.pct)} · ${fmtBytes(Number.isFinite(d.free) ? d.free : d.total - d.used)} free` })),
+        spare.length ? el('span', { class: 'meta fl-card-spare' },
+          `Not mounted: ${spare.map((dv) => `${dv.model || dv.device}${Number.isFinite(dv.size) ? ` (${fmtBytes(dv.size)})` : ''}`).join(', ')}`) : null,
         h.gpu ? bar(h.gpu.pct, 'GPU', { text: `${fmtPct(h.gpu.pct)}${Number.isFinite(h.gpu.tempC) ? ` · ${fmtTemp(h.gpu.tempC)}` : ''}` }) : null)
       : h.away
         // Away says where it is, not what went wrong: the connection error

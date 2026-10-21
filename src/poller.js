@@ -34,6 +34,26 @@ const ADAPTERS = {
   local: localAdapter,
 };
 
+/**
+ * The most one host's probe may take. Each adapter puts timeouts on its own
+ * calls, but a round waits for EVERY host and the next round does not start
+ * while one is in flight, so one call that never settles (a socket that
+ * neither answers nor closes, a child process that never exits) froze the
+ * whole fleet: on 2026-10-12 every host stopped updating for nine days and
+ * still read "online", showing that day's numbers. A probe past this is a
+ * failed probe, the host goes through the usual grace and offline path, and
+ * the next round runs.
+ */
+export const PROBE_DEADLINE_MS = 30_000;
+
+export function withDeadline(promise, ms, label = 'probe') {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(`${label}: no answer within ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 export class Poller extends EventEmitter {
   constructor({
     hosts, intervalMs = 10_000, historyLength = 90, now = Date.now, sustain = HYSTERESIS,
@@ -109,7 +129,7 @@ export class Poller extends EventEmitter {
       };
     } else {
       try {
-        next = await adapter.probe(host);
+        next = await withDeadline(adapter.probe(host), host.probeTimeoutMs || PROBE_DEADLINE_MS, host.id);
       } catch (e) {
         next = { ...prev, online: false, error: e.message || String(e), at: this.now() };
       }
