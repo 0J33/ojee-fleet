@@ -220,6 +220,7 @@ export class Poller extends EventEmitter {
     const raised = applyMutes(
       [...(next.alerts || []), ...deriveAlerts(next)],
       host.mute,
+      host.muteServices,
     );
     // Hysteresis, also before the roll-up and for the same reason: an alert
     // that has not held long enough must not move the status, because a

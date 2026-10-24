@@ -90,6 +90,7 @@ export async function probe(host) {
       kind: 'unit-failed',
       severity: 'err',
       text: `${f.unit} failed`,
+      service: String(f.unit || '').replace(/\.service$/, ''),
       hint: [f.scope === 'user' ? 'user unit' : null, f.detail].filter(Boolean).join(' · ') || undefined,
     });
   }

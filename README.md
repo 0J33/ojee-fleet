@@ -159,6 +159,17 @@ Temperature is two rules, not one — `cpu-temp` and `gpu-temp` — and muting t
 `HOST_<ID>_MUTE` (a comma list) overrides it without editing config. The kinds are `ALERT_KINDS`
 in `src/normalize.js`.
 
+Some services are off on purpose — a game server nobody is playing. Muting `service-down` for them
+would also hide the API beside them, so a host can name **services** instead:
+
+```jsonc
+{ "id": "disinteg", "kind": "teg", "muteServices": ["factorio", "terraria"] }
+```
+
+The service still shows, with its state; it just never raises `service-down` or `unit-failed`.
+Names match the service id or the systemd unit without `.service`. `HOST_<ID>_MUTE_SERVICES`
+overrides it.
+
 Muting is **per host**, because 95 °C means nothing on a laptop compiling something and means a
 failed fan on a server. And it happens **before** the status roll-up, not at render time — a muted
 rule cannot colour the host red, so it cannot reach Discord or the phone by another route either.

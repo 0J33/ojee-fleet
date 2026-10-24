@@ -61,6 +61,7 @@ export function loadConfig() {
       // A comma list in the environment overrides the file, so a noisy rule
       // can be silenced on a running deployment without editing config.
       const envMute = process.env[`HOST_${key}_MUTE`];
+      const envMuteServices = process.env[`HOST_${key}_MUTE_SERVICES`];
       return {
         ...h,
         origin: process.env[`HOST_${key}_ORIGIN`] || h.origin,
@@ -68,6 +69,11 @@ export function loadConfig() {
         mute: envMute != null
           ? envMute.split(',').map((x) => x.trim()).filter(Boolean)
           : (h.mute || []),
+        // Services that are off on purpose (a game server nobody is playing):
+        // shown, never alerted. Matched against the service id and the unit name.
+        muteServices: envMuteServices != null
+          ? envMuteServices.split(',').map((x) => x.trim()).filter(Boolean)
+          : (h.muteServices || []),
         // How long this host may be unreachable before anyone is told. A
         // laptop that sleeps, a box on Wi-Fi, a tunnel that re-dials: these
         // go away for a minute and come back, and a monitor that announces

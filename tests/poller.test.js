@@ -336,6 +336,34 @@ test('muting', async (t) => {
   });
 });
 
+test('muting services by name', async (t) => {
+  const { applyMutes, deriveAlerts } = await import('../src/normalize.js');
+  const host = {
+    name: 'disinteg',
+    online: true,
+    services: [
+      { id: 'factorio', name: 'Factorio', ok: false },
+      { id: 'terraria', name: 'Terraria', ok: false },
+      { id: 'nginx', name: 'Nginx', ok: false },
+    ],
+  };
+  const unitFailed = { kind: 'unit-failed', severity: 'err', text: 'terraria.service failed', service: 'terraria' };
+
+  await t.test('a quiet service raises nothing, from either rule', () => {
+    const left = applyMutes([unitFailed, ...deriveAlerts(host)], [], ['factorio', 'terraria']);
+    assert.deepEqual(left.map((a) => a.key || a.kind), ['service-down:nginx']);
+  });
+
+  await t.test('without the list every stopped service still alerts', () => {
+    assert.equal(applyMutes(deriveAlerts(host), []).length, 3);
+  });
+
+  await t.test('it composes with muted kinds', () => {
+    const left = applyMutes([unitFailed, ...deriveAlerts(host)], ['service-down'], ['terraria']);
+    assert.deepEqual(left, []);
+  });
+});
+
 test('the notifier', async (t) => {
   const sent = [];
   const mk = (over = {}) => new Notifier({

@@ -174,6 +174,7 @@ export function deriveAlerts(h) {
         text: `${s.name} is not running on ${h.name}`,
         hint: s.detail || undefined,
         key: `service-down:${s.id || s.name}`,
+        service: s.id || s.name,
       });
     }
   }
@@ -191,11 +192,17 @@ export function deriveAlerts(h) {
  *
  * Muted alerts are removed BEFORE status is rolled up, so a muted rule cannot
  * colour the host red, ping Discord, or raise a phone notification either.
+ *
+ * `services` mutes by service rather than by kind: a game server that is off
+ * because nobody is playing is not an outage, but muting all of
+ * `service-down` would hide the API next to it. An alert names its service in
+ * `a.service` (the id, or the unit without ".service").
  */
-export function applyMutes(alerts, mute) {
-  if (!mute?.length) return alerts;
-  const set = new Set(mute);
-  return alerts.filter((a) => !set.has(a.kind));
+export function applyMutes(alerts, mute, services) {
+  if (!mute?.length && !services?.length) return alerts;
+  const kinds = new Set(mute || []);
+  const quiet = new Set(services || []);
+  return alerts.filter((a) => !kinds.has(a.kind) && !(a.service && quiet.has(a.service)));
 }
 
 /** err beats warn beats ok — for rolling a list of things up into one word. */
