@@ -18,6 +18,16 @@ import {
 
 const TIMEOUT_MS = 6000;
 
+/**
+ * The last /api/checks each host answered, and when. That call is optional (a box whose checks
+ * stall is still up), but "no answer" is not "nothing failed": read as the latter, one slow reply
+ * cleared a failed unit's alert, the host went green ("healthy again") and the next reply raised
+ * it again ("in trouble"), over and over (disinteg's health-backup.service, 2026-11-16). So a
+ * missing answer keeps the last one, for as long as it is recent.
+ */
+const lastChecks = new Map();
+const CHECKS_KEEP_MS = 15 * 60_000;
+
 async function get(host, pathname, { optional = false } = {}) {
   const url = new URL(pathname, host.origin).toString();
   const ctrl = new AbortController();
@@ -85,7 +95,13 @@ export async function probe(host) {
       alerts.push({ kind: 'smart', severity: 'warn', text: `${key} filesystem has logged ${h.fs_errors} errors` });
     }
   }
-  for (const f of checks?.failed || []) {
+  let checksNow = checks;
+  if (checks) lastChecks.set(host.id, { at: Date.now(), checks });
+  else {
+    const kept = lastChecks.get(host.id);
+    if (kept && Date.now() - kept.at < CHECKS_KEEP_MS) checksNow = kept.checks;
+  }
+  for (const f of checksNow?.failed || []) {
     alerts.push({
       kind: 'unit-failed',
       severity: 'err',

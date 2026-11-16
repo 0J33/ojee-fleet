@@ -195,3 +195,17 @@ test('alert rules', async (t) => {
     assert.equal(pct(50, 100), 50);
   });
 });
+
+test('teg adapter — a check that does not answer keeps the failed units it last listed', async () => {
+  const host = { id: 'flappy', kind: 'teg', origin: 'https://example.invalid' };
+  const full = { '/api/stats': fixture('teg-stats.json'), '/api/checks': fixture('teg-checks.json') };
+  const first = await withFetch(fakeFetch(full), () => teg.probe(host));
+  const failed = (fixture('teg-checks.json').failed || []).length;
+  assert.equal(first.alerts.filter((a) => a.kind === 'unit-failed').length, failed);
+  // /api/checks stalls once: the units are still failed, so the alerts stay (no false "healthy again").
+  const second = await withFetch(fakeFetch({ '/api/stats': fixture('teg-stats.json') }), () => teg.probe(host));
+  assert.equal(second.alerts.filter((a) => a.kind === 'unit-failed').length, failed);
+  // An answer that lists none clears them at once.
+  const third = await withFetch(fakeFetch({ ...full, '/api/checks': { failed: [] } }), () => teg.probe(host));
+  assert.equal(third.alerts.filter((a) => a.kind === 'unit-failed').length, 0);
+});

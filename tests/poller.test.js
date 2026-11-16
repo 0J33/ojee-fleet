@@ -155,6 +155,20 @@ test('a brief disconnect is not an outage', async (t) => {
     assert.deepEqual(pings, []);
   });
 
+  await t.test('a host in trouble that misses one poll stays in trouble: no "healthy again", no second "in trouble"', async () => {
+    const sick = healthy({ disks: [{ label: '/', pct: 99 }] });
+    const p = build([healthy(), sick, gone, sick]);
+    const pings = [];
+    p.on('transition', (x) => pings.push(`${x.from}->${x.to}`));
+    await p.probeOne(graceHost);
+    clock.t += 10_000; await p.probeOne(graceHost);   // in trouble
+    clock.t += 10_000; await p.probeOne(graceHost);   // no answer, inside the window
+    assert.equal(p.get('box').status, 'err', 'still in trouble while it does not answer');
+    assert.ok(p.get('box').alerts.length > 0, 'with the alerts it had');
+    clock.t += 10_000; await p.probeOne(graceHost);   // answers again, same trouble
+    assert.deepEqual(pings, ['ok->err'], 'one incident, announced once');
+  });
+
   await t.test('a host still gone when the window closes IS news', async () => {
     const p = build([healthy(), gone]);
     const pings = [];

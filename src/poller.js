@@ -225,7 +225,13 @@ export class Poller extends EventEmitter {
     // Hysteresis, also before the roll-up and for the same reason: an alert
     // that has not held long enough must not move the status, because a
     // status change is what pings.
-    const { confirmed, pending } = this.confirm(host, raised);
+    // A host that has not answered this once (inside its grace window) has no new reading: what it
+    // had stays as it was, clocks and all. Forgetting it here turned one missed poll into a
+    // "healthy again", and the next answer into a fresh "in trouble" (disinteg, 2026-11-16).
+    const inGrace = !next.online && next.pending;
+    const { confirmed, pending } = inGrace
+      ? { confirmed: (prev?.alerts || []).filter((a) => a.kind !== 'unreachable'), pending: prev?.pendingAlerts || [] }
+      : this.confirm(host, raised);
     next.alerts = confirmed;
     next.pendingAlerts = pending;
     next.muted = host.mute || [];
