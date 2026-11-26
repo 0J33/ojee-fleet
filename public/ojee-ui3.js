@@ -69,6 +69,87 @@ export function spark(points, { status = null, threshold = null, min = null, max
   return `<div class="sp" style="${style}"${aria}><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${t}<path class="a" d="${area}"/><path class="l" d="${line}"/></svg>${end}</div>`;
 }
 
+/* ── sheet ──────────────────────────────────────────────────────────── */
+/**
+ * A side sheet on desktop (≥1000px), a bottom sheet on phones — for a task
+ * that needs more room than a row but should not leave the page (the AC's
+ * full controls, a form). Focus-trapped, Escape and the scrim close it, and
+ * on a phone it follows the finger down and dismisses on a flick.
+ *
+ *   const s = openSheet({ title, sub, body: html|Node, actions: [{ label, value, variant }], width: 480, onClose })
+ *   s.body       the scrolling body element (render into it)
+ *   s.close(v)   closes; `await s.done` resolves with v (or null)
+ */
+export function openSheet({ title = '', sub = '', body = '', actions = [], width = 480, onClose = null, flush = false, root = null } = {}) {
+  const host = root || document.getElementById('app') || document.body;
+  const opener = document.activeElement;
+  const bg = document.createElement('div');
+  bg.className = 'sheet-bg';
+  const el = document.createElement('section');
+  el.className = 'sheet';
+  el.setAttribute('role', 'dialog');
+  el.setAttribute('aria-modal', 'true');
+  el.tabIndex = -1;
+  el.style.setProperty('--sheet-w', `${width}px`);
+  const tid = `sheet-${Math.random().toString(36).slice(2, 8)}`;
+  el.setAttribute('aria-labelledby', tid);
+  el.innerHTML = `<div class="grab" data-grab><i></i></div>
+    <header class="sheet-h"><div style="min-width:0;margin-right:auto"><h2 id="${tid}"></h2>${sub ? '<div class="sub"></div>' : ''}</div><button class="ib" type="button" data-sheet-close aria-label="Close">${ic('x')}</button></header>
+    <div class="sheet-b${flush ? ' flush' : ''}"></div>
+    ${actions.length ? '<footer class="sheet-f"></footer>' : ''}`;
+  el.querySelector('h2').textContent = title;
+  if (sub) el.querySelector('.sub').textContent = sub;
+  const b = el.querySelector('.sheet-b');
+  if (typeof body === 'string') b.innerHTML = body; else if (body instanceof Node) b.append(body);
+  let resolve;
+  const done = new Promise((r) => { resolve = r; });
+  let closed = false;
+  const close = (v = null) => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('keydown', onKey, true);
+    el.classList.remove('on'); bg.classList.remove('on');
+    setTimeout(() => { el.remove(); bg.remove(); }, 300);
+    opener?.focus?.({ preventScroll: true });
+    onClose?.(v);
+    resolve(v);
+  };
+  for (const a of actions) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `btn${a.variant === 'primary' ? ' pri' : a.variant === 'danger' ? ' danger solid' : a.variant === 'ghost' ? ' ghost' : ''}`;
+    btn.textContent = a.label;
+    btn.addEventListener('click', () => (a.onClick ? a.onClick({ close }) : close(a.value ?? a.label)));
+    el.querySelector('.sheet-f').append(btn);
+  }
+  const focusables = () => [...el.querySelectorAll('button:not(:disabled), [href], input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])')].filter((x) => x.offsetParent !== null);
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      if (document.querySelector('.modal-backdrop')) return;
+      e.preventDefault(); e.stopImmediatePropagation(); close(null); return;
+    }
+    if (e.key !== 'Tab') return;
+    const f = focusables(); if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+  };
+  el.addEventListener('click', (e) => { if (e.target.closest('[data-sheet-close]')) close(null); });
+  bg.addEventListener('click', () => close(null));
+  document.addEventListener('keydown', onKey, true);
+  // Drag to dismiss (phones): 1:1, a flick is enough, resistance upward.
+  let y0 = 0; let t0 = 0; let dy = 0; let drag = false;
+  const grab = el.querySelector('[data-grab]');
+  grab.addEventListener('pointerdown', (e) => { drag = true; y0 = e.clientY; t0 = performance.now(); dy = 0; grab.setPointerCapture(e.pointerId); el.style.transition = 'none'; });
+  grab.addEventListener('pointermove', (e) => { if (!drag) return; dy = e.clientY - y0; el.style.transform = `translateY(${dy < 0 ? -(Math.abs(dy) * 60) / (60 + Math.abs(dy)) : dy}px)`; });
+  const end = () => { if (!drag) return; drag = false; const v = dy / Math.max(1, performance.now() - t0); el.style.transition = ''; el.style.transform = ''; if (dy > el.offsetHeight * 0.3 || v > 0.11) close(null); };
+  grab.addEventListener('pointerup', end); grab.addEventListener('pointercancel', end);
+  host.append(bg, el);
+  void el.offsetWidth;
+  bg.classList.add('on'); el.classList.add('on');
+  (focusables().find((x) => !x.matches('[data-sheet-close]')) || el).focus({ preventScroll: true });
+  return { el, body: b, close, done };
+}
+
 /* ── segmented controls ─────────────────────────────────────────────── */
 const segMemo = new WeakMap();
 const segKey = new Map();
@@ -130,4 +211,4 @@ export function ago(ms, now = Date.now()) {
   return `${Math.round(h / 24)}d`;
 }
 
-export default { esc, ic, col, mv, metric, tag, st, bar, spark, placeSegs, bindSeg, ensureSprite, ago };
+export default { esc, ic, col, mv, metric, tag, st, bar, spark, placeSegs, bindSeg, ensureSprite, ago, openSheet };

@@ -12,8 +12,8 @@
      convention as v1/v2: vendored, never fetched from a CDN). Inside the
      console a module needs none of it: the shell already loads it.
    - Inline icons3.svg once per page; icons are <svg class="i"><use href="#i-name"/></svg>.
-   - Layout queries are CONTAINER queries on `app` (the shell's root is the
-     container). A standalone page wraps its content in `.ui3-root`.
+   - Layout queries are CONTAINER queries on `app`; <body> is that container,
+     so they follow the page width in the console and standalone alike.
      Breakpoints: 700 (portrait tablet / narrow desktop), 1000, 1200 (sidebar).
    - Theme: <html data-theme="dark|light">; without it the OS decides.
      Accent: data-accent="cyan" (default) | "orange" | "violet".
@@ -81,7 +81,9 @@
 *,*::before,*::after{box-sizing:border-box}
 html,body{margin:0}
 html{-webkit-tap-highlight-color:transparent;-webkit-text-size-adjust:100%;text-size-adjust:100%;background:var(--page)}
-body{background:var(--page);color:var(--fg);font:400 14px/1.45 var(--font-sans);font-feature-settings:"ss01";-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
+/* body is the `app` container: every layout query in this file (and in
+   modules) is a container query against the page's width. */
+body{container-type:inline-size;container-name:app;background:var(--page);color:var(--fg);font:400 14px/1.45 var(--font-sans);font-feature-settings:"ss01";-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility}
 ::selection{background:color-mix(in srgb,var(--acc) 30%,transparent);color:inherit}
 button,a,[role="button"],[role="tab"],[role="switch"]{touch-action:manipulation}
 button,[role="button"],[role="tab"],[role="switch"],.btn,.ib,.tab,.nav,.seg,.chip{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
@@ -112,7 +114,8 @@ kbd,.kbd{display:inline-flex;align-items:center;font:500 11px/1 var(--font-mono)
 .i{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;vertical-align:middle}
 .i.s{width:14px;height:14px}.i.l{width:18px;height:18px}.i.xl{width:24px;height:24px}
 
-/* standalone pages: be the container the components query */
+/* a nested region that should lay out by its own width (a side panel, a
+   standalone embed) can become the container instead */
 .ui3-root{container:app/inline-size}
 
 /* ---------- wordmark ---------- */
@@ -128,7 +131,7 @@ kbd,.kbd{display:inline-flex;align-items:center;font:500 11px/1 var(--font-mono)
      <nav class="tabbar"> … </nav>                <1200: bottom tab bar
    </div>
    The nav never disappears: one of the two is always on screen. */
-.shell{container:app/inline-size;position:relative;height:100vh;height:100dvh;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;background:var(--page);overflow:hidden}
+.shell{position:relative;height:100vh;height:100dvh;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;background:var(--page);overflow:hidden}
 .side{display:none}
 .topbar{display:flex;align-items:center;gap:4px;height:calc(var(--topbar-h) + var(--safe-t));padding:var(--safe-t) calc(8px + var(--safe-r)) 0 calc(16px + var(--safe-l));border-bottom:1px solid var(--line);background:var(--page);position:relative;z-index:6}
 .topbar .wm{margin-right:auto}
@@ -253,8 +256,8 @@ kbd,.kbd{display:inline-flex;align-items:center;font:500 11px/1 var(--font-mono)
 .tag.c{border-color:transparent;background:color-mix(in srgb,var(--c) 14%,transparent);color:var(--c)}
 .tag.ok{--c:var(--ok)}.tag.warn{--c:var(--warn)}.tag.err{--c:var(--err)}.tag.acc{--c:var(--acc)}
 .tag.ok,.tag.warn,.tag.err,.tag.acc{border-color:transparent;background:color-mix(in srgb,var(--c) 14%,transparent);color:var(--c)}
-.st{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg-2);white-space:nowrap;min-width:0}
-.st>span:last-child{overflow:hidden;text-overflow:ellipsis}
+.st{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg-2);white-space:nowrap;min-width:0;max-width:100%}
+.st>span:last-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .sev{width:28px;height:28px;border-radius:var(--r-2);display:grid;place-items:center;flex:none;background:color-mix(in srgb,var(--c,var(--fg-3)) 13%,transparent);color:var(--c,var(--fg-3))}
 .sev.ok{--c:var(--ok)}.sev.warn{--c:var(--warn)}.sev.err{--c:var(--err)}
 
@@ -275,6 +278,7 @@ kbd,.kbd{display:inline-flex;align-items:center;font:500 11px/1 var(--font-mono)
 .mv{font:500 15px/1.2 var(--font-mono);font-variant-numeric:tabular-nums;letter-spacing:-.02em;white-space:nowrap;color:var(--c,var(--fg));overflow:hidden;text-overflow:ellipsis}
 .mv .u{color:var(--fg-3);font-size:.78em;margin-left:1px;letter-spacing:0}
 .mv.lg{font-size:22px;letter-spacing:-.035em}
+.mv.txt{font-family:var(--font-sans);font-size:14px !important;letter-spacing:-.005em;font-weight:500;line-height:1.35;padding-top:2px}
 .mv.xl{font-size:32px;letter-spacing:-.04em;font-weight:500}
 .mv.ok{--c:var(--ok)}.mv.warn{--c:var(--warn)}.mv.err{--c:var(--err)}
 .ml{font-size:11.5px;color:var(--fg-3);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -294,7 +298,7 @@ kbd,.kbd{display:inline-flex;align-items:center;font:500 11px/1 var(--font-mono)
 
 /* bars */
 .bar{height:4px;border-radius:2px;background:var(--line);overflow:hidden;margin-top:8px}
-.bar i{display:block;height:100%;border-radius:2px;background:var(--c,var(--fg-2));transition:width 300ms var(--ease-out)}
+.bar i{display:block;height:100%;border-radius:2px;background:var(--c,var(--fg-2))}
 .bar.ok{--c:var(--ok)}.bar.warn{--c:var(--warn)}.bar.err{--c:var(--err)}
 
 /* ---------- list rows ---------- */
@@ -338,16 +342,24 @@ a.row,button.row{width:100%;text-align:left;transition:background-color 120ms ea
 .srow{display:grid;grid-template-columns:minmax(0,1fr) 96px;grid-template-areas:"n s" "m m";gap:12px 16px;padding:14px;border-top:1px solid var(--line);align-items:center;transition:background-color 120ms ease;cursor:pointer;color:inherit}
 .srow:first-child{border-top:0}
 .srow .n{grid-area:n;display:flex;align-items:center;gap:12px;min-width:0}
-.srow .n>div{min-width:0}
+.srow .n>div{min-width:0;overflow:hidden}
 .srow .mets{grid-area:m;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
 .srow .spw{grid-area:s;min-width:0}
 .srow .chev{display:none;color:var(--fg-3)}
-.srow .qa{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
+.srow{position:relative}
+.srow .stretch{color:inherit;text-decoration:none}
+.srow .stretch::after{content:"";position:absolute;inset:0;border-radius:inherit}
+.srow .stretch:focus-visible{outline:none}
+.srow:has(.stretch:focus-visible){outline:2px solid var(--acc);outline-offset:-2px}
+.srow .qa{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1}
+.srow .qa .chip .i{width:14px;height:14px}
+.srow .qa .chip[aria-pressed="true"] .i{color:var(--acc)}
 .srow .line{grid-area:m;color:var(--fg-2);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @container app (min-width:700px){
   .srow{grid-template-columns:200px minmax(0,1fr) 132px 16px;grid-template-areas:"n m s c";padding:12px 16px}
   .srow .mets{grid-template-columns:repeat(4,minmax(0,1fr))}
   .srow .chev{display:block;grid-area:c}
+  .srow .qa{grid-column:2/4}
 }
 @container app (min-width:1200px){
   .srow{grid-template-columns:240px minmax(0,1fr) 240px 16px;gap:12px 28px}
@@ -413,7 +425,7 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
 .set .t{font-weight:500}
 .set .d{font-size:12.5px;color:var(--fg-3);grid-column:1}
 .set .ctrl{grid-column:2;grid-row:1/3;display:flex;align-items:center;gap:8px;justify-content:flex-end}
-@container app (max-width:520px){.set.stack{grid-template-columns:minmax(0,1fr)}.set.stack .ctrl{grid-column:1;grid-row:auto;justify-content:flex-start;margin-top:8px}}
+@container app (max-width:520px){.set.wrap{grid-template-columns:minmax(0,1fr)}.set.wrap .ctrl{grid-column:1;grid-row:auto;justify-content:flex-start;margin-top:8px}}
 
 /* switch: <button class="sw" role="switch" aria-checked="true"></button> */
 .sw{width:36px;height:20px;border-radius:10px;background:var(--line-2);position:relative;transition:background-color 150ms ease;flex:none;cursor:pointer}
@@ -432,7 +444,15 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
 .field{display:grid;gap:6px}
 .field>label,.field>.lbl{font-size:12px;font-weight:500;color:var(--fg-2)}
 .unit{font-size:12px;color:var(--fg-3)}
-@media (pointer:coarse){.input,.select,.textarea,.in,input,select,textarea{font-size:16px}}
+@media (pointer:coarse){
+  .input,.select,.textarea,.in,input,select,textarea{font-size:16px}
+  /* fingers: 40–44px targets where a mouse is happy with 28–32 */
+  .btn{height:40px}.btn.sm,.btn--sm{height:36px;padding:0 12px}
+  .ib{width:40px;height:40px}.ib.sm{width:36px;height:36px}
+  .chip{height:34px}
+  .seg button,.seg a{height:32px}
+  .nav{height:40px}
+}
 
 /* ---------- terminal surface ---------- */
 .term{background:var(--term);color:var(--term-fg);font:400 13px/1.6 var(--font-mono);padding:14px 16px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;letter-spacing:-.01em}
@@ -453,6 +473,9 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
 .inbox.open{transform:none;visibility:visible;transition:transform 380ms var(--ease-drawer)}
 .inbox .grab{display:flex;justify-content:center;padding:8px 0 2px;touch-action:none;cursor:grab}
 .inbox .grab i{width:36px;height:4px;border-radius:2px;background:var(--line-2)}
+@container app (min-width:700px) and (max-width:1199px){
+  .inbox{width:560px;left:50%;right:auto;margin-left:-280px;max-height:72vh;max-height:72dvh}
+}
 @container app (min-width:1200px){
   .inbox{left:auto;right:24px;top:20px;bottom:auto;width:440px;max-height:min(760px,calc(100vh - 40px));border-radius:var(--r-4);transform-origin:0 0;transform:scale(.97) translateX(-6px);opacity:0;
     transition:transform 140ms var(--ease-out),opacity 140ms var(--ease-out),visibility 0s 140ms}
@@ -537,6 +560,37 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
 .modal-foot .btn{height:32px}
 @keyframes ui3-fade{from{opacity:0}}
 @keyframes ui3-pop{from{opacity:0;transform:scale(.97)}}
+
+/* ---------- sheet (side sheet on desktop, bottom sheet on phones) ----------
+   ui3.openSheet({ title, body, actions }) builds this; markup if hand-made:
+   <div class="sheet-bg"></div>
+   <section class="sheet" role="dialog" aria-modal="true">
+     <div class="grab"><i></i></div>
+     <header class="sheet-h"><h2>Title</h2><button class="ib">×</button></header>
+     <div class="sheet-b"> … </div>
+     <footer class="sheet-f"> buttons </footer>
+   </section>
+   Viewport media queries (not container queries): a sheet may live outside the shell. */
+.sheet-bg{position:fixed;inset:0;z-index:75;background:var(--scrim);opacity:0;transition:opacity 220ms ease}
+.sheet-bg.on{opacity:1}
+.sheet{position:fixed;z-index:76;left:0;right:0;bottom:0;max-height:92vh;max-height:92dvh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-2);border-bottom:0;border-radius:14px 14px 0 0;box-shadow:var(--sh-3);transform:translateY(100%);transition:transform 380ms var(--ease-drawer);outline:none}
+.sheet.on{transform:none}
+.sheet .grab{display:flex;justify-content:center;padding:8px 0 2px;touch-action:none;cursor:grab;flex:none}
+.sheet .grab i{width:36px;height:4px;border-radius:2px;background:var(--line-2)}
+.sheet-h{display:flex;align-items:center;gap:8px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line);flex:none}
+.sheet-h h2{font-size:15px;font-weight:600;letter-spacing:-.01em;margin-right:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheet-h .sub{font-size:12px;color:var(--fg-3)}
+.sheet-b{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px}
+.sheet-b.flush{padding:0}
+.sheet-f{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px calc(12px + var(--safe-b));border-top:1px solid var(--line);background:var(--raised);flex:none}
+@media (min-width:700px) and (max-width:999px){.sheet{width:560px;left:50%;right:auto;margin-left:-280px}}
+@media (min-width:1000px){
+  .sheet{left:auto;top:0;right:0;bottom:0;width:min(var(--sheet-w,480px),100vw);max-height:none;border-radius:0;border:0;border-left:1px solid var(--line-2);transform:translateX(100%);transition:transform 260ms var(--ease-out)}
+  .sheet.on{transform:none}
+  .sheet .grab{display:none}
+  .sheet-f{padding-bottom:12px}
+}
+@media (prefers-reduced-motion:reduce){.sheet,.sheet.on{transition:opacity 180ms ease;transform:none}.sheet:not(.on){opacity:0}}
 
 /* ---------- skeleton & loading ---------- */
 .skeleton,.sk{background:linear-gradient(90deg,var(--raised) 0%,var(--hover) 50%,var(--raised) 100%);background-size:200% 100%;border-radius:var(--r-2);animation:ui3-shimmer 1.4s ease-in-out infinite;min-height:12px}
