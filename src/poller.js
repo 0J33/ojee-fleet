@@ -21,7 +21,7 @@
 
 import { EventEmitter } from 'node:events';
 import {
-  HYSTERESIS, HYSTERESIS_BY_KIND, alertKey, applyMutes, deriveAlerts, limitsFor, worst,
+  HYSTERESIS, HYSTERESIS_BY_KIND, alertKey, applyMutes, deriveAlerts, limitsFor, serviceMuted, worst,
 } from './normalize.js';
 
 import * as tegAdapter from './adapters/teg.js';
@@ -247,6 +247,11 @@ export class Poller extends EventEmitter {
     next.alerts = confirmed;
     next.pendingAlerts = pending;
     next.muted = host.mute || [];
+    // Services this host was told to keep quiet about (a project stopped on
+    // purpose) are still listed, but as muted: not red, not "something wrong".
+    if (host.muteServices?.length && Array.isArray(next.services)) {
+      next.services = next.services.map((sv) => (serviceMuted(sv.id, host.muteServices) || serviceMuted(sv.name, host.muteServices) ? { ...sv, muted: true } : sv));
+    }
     next.status = next.online ? worst(next.alerts) : 'err';
 
     // A host inside its grace window keeps the status it had. Flipping to

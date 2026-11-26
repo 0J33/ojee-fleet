@@ -66,6 +66,8 @@
 .fl .fl-svc-m{display:none}
 .fl .fl-svc .fl-rs,.fl .fl-svc>span:last-child{grid-area:b}
 .fl .fl-svc.bad .fl-svc-n{color:var(--fg);font-weight:500}
+.fl .fl-svc.muted .fl-svc-n{color:var(--fg-3)}
+.fl .fl-svc.muted .dot{--c:var(--fg-4,var(--line-2))}
 .fl .fl-svc.bad .fl-svc-d{color:var(--err)}
 @container app (min-width:700px){
   .fl .fl-svc{grid-template-columns:7px minmax(0,1.2fr) minmax(0,1fr) 72px 112px;grid-template-areas:"d n t m b"}

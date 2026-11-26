@@ -85,6 +85,7 @@ const hostIcon = (h) => ICON[h.tag] || (h.battery ? 'i-laptop' : 'i-server');
 function hostState(h) {
   if (h.away) return null;
   if (!h.online) return h.pending ? 'warn' : 'err';
+  if (h.status === 'ok' && (h.tempState === 'err' || h.tempState === 'warn')) return 'warn';
   return h.status === 'err' ? 'err' : h.status === 'warn' ? 'warn' : h.status === 'ok' ? 'ok' : null;
 }
 
@@ -288,20 +289,25 @@ function hostDetails(h) {
 }
 
 function svcGroup(h) {
-  const list = (h.services || []).slice().sort((a, b) => (a.ok === b.ok ? a.name.localeCompare(b.name) : a.ok ? 1 : -1));
+  // Order: stopped (wrong), running, then muted ones that are off on purpose.
+  const rank = (s) => (s.ok === false ? (s.muted ? 2 : 0) : 1);
+  const list = (h.services || []).slice().sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   if (!list.length) return '';
-  const down = list.filter((s) => s.ok === false);
+  const down = list.filter((s) => s.ok === false && !s.muted);
+  const quiet = list.filter((s) => s.ok === false && s.muted);
   const open = S.open[h.id] ?? down.length > 0;
   const canRestart = h.capabilities?.actions && h.online;
   const rows = list.map((s) => {
     const key = `${h.id}:${s.id}`;
     const r = S.restarting[key];
     const mem = fin(s.memory) ? `${(s.memory / 1024 ** 2) >= 1024 ? (s.memory / 1024 ** 3).toFixed(1) + ' GB' : Math.round(s.memory / 1024 ** 2) + ' MB'}` : '';
-    const detail = s.ok === false
-      ? (s.downSince ? `stopped ${ago(s.downSince)}` : (s.detail || 'stopped'))
-      : (s.detail || '');
-    return `<div class="fl-svc${s.ok === false ? ' bad' : ''}">
-      <span class="dot ${s.ok === false ? (s.unknown ? 'warn' : 'err') : 'ok'}"></span>
+    const off = s.ok === false && s.muted;
+    const detail = off ? 'off · muted'
+      : s.ok === false
+        ? (s.downSince ? `stopped ${ago(s.downSince)}` : (s.detail || 'stopped'))
+        : (s.detail || '');
+    return `<div class="fl-svc${s.ok === false && !off ? ' bad' : ''}${off ? ' muted' : ''}">
+      <span class="dot ${off ? '' : s.ok === false ? (s.unknown ? 'warn' : 'err') : 'ok'}"></span>
       <span class="fl-svc-n">${esc(s.name)}</span>
       <span class="fl-svc-d m">${esc(detail)}</span>
       <span class="fl-svc-m m">${esc(mem)}</span>
@@ -310,7 +316,7 @@ function svcGroup(h) {
   }).join('');
   return `<details class="panel clip fl-svcs" data-host="${esc(h.id)}" ${open ? 'open' : ''}>
     <summary><span class="dot ${down.length ? 'err' : h.away ? '' : 'ok'}"></span><b>${esc(h.name)}</b>
-      <span class="m fl-count">${down.length ? `${down.length} stopped · ` : ''}${list.length - down.length}/${list.length} running</span>
+      <span class="m fl-count">${down.length ? `${down.length} stopped · ` : ''}${list.length - down.length - quiet.length}/${list.length - quiet.length} running${quiet.length ? ` · ${quiet.length} muted` : ''}</span>
       ${h.away ? '<span class="tag">last known</span>' : ''}${ic('i-chevdown', 's fl-chev')}</summary>
     <div class="fl-svc-list">${rows}</div>
   </details>`;
@@ -355,7 +361,8 @@ function render() {
   const dual = hosts.find((h) => (h.remote?.devices || []).length > 1);
   const sub = `${hosts.length} host${hosts.length === 1 ? '' : 's'} · ${d.online} up${dual ? ` · ${esc(dual.name)} boots Linux or Windows` : ''}`;
   const services = hosts.filter((h) => !h.away).flatMap((h) => h.services || []);
-  const stopped = services.filter((s) => s.ok === false).length;
+  const muted = services.filter((s) => s.ok === false && s.muted).length;
+  const stopped = services.filter((s) => s.ok === false && !s.muted).length;
   const scrollY = root.closest('.main')?.scrollTop;
 
   const typing = document.activeElement?.dataset?.procq;
@@ -385,7 +392,7 @@ function render() {
     ${shellHead ? '' : `<div class="ph"><div><h1>Machines</h1><p>${sub}</p></div><div class="acts">${hdrActs}</div></div>`}
     ${alertsBlock(d)}
     <section class="sec" id="fl-hosts"><div class="fl-hosts">${hosts.map(hostCard).join('')}</div></section>
-    <section class="sec" id="fl-services"><div class="sh"><h2>Services</h2><span class="note">${stopped ? `${stopped} stopped · ` : ''}${services.length - stopped} of ${services.length} running</span></div>
+    <section class="sec" id="fl-services"><div class="sh"><h2>Services</h2><span class="note">${stopped ? `${stopped} stopped · ` : ''}${services.length - stopped - muted} of ${services.length - muted} running${muted ? ` · ${muted} muted` : ''}</span></div>
       <div class="fl-svc-groups">${hosts.map(svcGroup).join('')}</div></section>
   </div>`;
   ui.placeSegs?.(root);

@@ -235,6 +235,12 @@ export function deriveAlerts(h, limits = LIMITS) {
  * `service-down` would hide the API next to it. An alert names its service in
  * `a.service` (the id, or the unit without ".service").
  */
+/** Does this host's muteServices list quiet the service with this id? */
+export function serviceMuted(id, services) {
+  if (!id || !services?.length) return false;
+  return services.some((x) => (x.endsWith('*') ? id.startsWith(x.slice(0, -1)) : x === id));
+}
+
 export function applyMutes(alerts, mute, services) {
   if (!mute?.length && !services?.length) return alerts;
   const kinds = new Set(mute || []);

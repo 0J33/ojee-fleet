@@ -70,17 +70,40 @@ export function toast(kind, title, detail = '', { stack = '#toasts', ms } = {}) 
   node.className = `toast toast--${kind}`;
   node.setAttribute('role', kind === 'err' ? 'alert' : 'status');
 
+  // A status dot, the same one device rows, the entity header and the status
+  // bar use. The toast used to signal its kind with a coloured left border
+  // alone — a device that appears nowhere else in the console, and the one
+  // channel a colour-blind reader cannot use. The dot carries the same accent
+  // and sits in the vocabulary everything else already speaks.
+  const dot = document.createElement('span');
+  dot.className = `dot dot--${kind === 'err' ? 'err' : kind === 'warn' ? 'warn' : kind === 'ok' ? 'ok' : 'info'}`;
+
+  const txt = document.createElement('div');
+  txt.className = 'toast-txt';
   const b = document.createElement('b');
   b.textContent = title;
-  const s = document.createElement('span');
-  s.textContent = detail;
-  node.append(b, s);
+  const sp = document.createElement('span');
+  sp.textContent = detail;
+  txt.append(b, sp);
+
+  // Dismissable. Everything else that covers content — the palette, the modal
+  // — can be closed deliberately; a toast that can only be waited out is the
+  // odd one, and an error toast is exactly the one you want to keep or clear
+  // on your own terms.
+  const x = document.createElement('button');
+  x.className = 'toast-x';
+  x.type = 'button';
+  x.setAttribute('aria-label', 'Dismiss');
+  x.innerHTML = '<svg class="i s" aria-hidden="true"><use href="#i-x"></use></svg>';
+  x.addEventListener('click', () => { clearTimeout(timer); node.remove(); });
+
+  node.append(dot, txt, x);
   host.appendChild(node);
 
   const life = ms ?? (kind === 'err' ? 7000 : 4200);
-  setTimeout(() => {
-    node.style.opacity = '0';
-    setTimeout(() => node.remove(), 250);
+  const timer = setTimeout(() => {
+    node.classList.add('out');
+    setTimeout(() => node.remove(), 200);
   }, life);
   return node;
 }
@@ -143,7 +166,15 @@ export function modal({ title, body, actions = [], root = '#modal-root' } = {}) 
     )].filter((el) => !el.disabled && el.offsetParent !== null);
 
     const onKey = (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); close(null); return; }
+      if (e.key === 'Escape') {
+        // Stop here. The page behind a dialog has its own idea of what
+        // Escape does — the idle display leaves it, a player closes — and
+        // one key must not do two things at once.
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        close(null);
+        return;
+      }
       if (e.key !== 'Tab') return;
       const f = focusables();
       if (!f.length) return;
@@ -259,8 +290,10 @@ export class ModuleHost {
    * @param {string}      opts.base        URL prefix for api/sse ('' standalone)
    * @param {Function}    opts.onUnauthorized
    */
-  constructor({ el, base = '', onUnauthorized } = {}) {
+  constructor({ el, base = '', onUnauthorized, extendCtx = null } = {}) {
     this.el = el;
+    // A host may add to ctx (the console adds `header`): extendCtx(manifest, view) -> object.
+    this.extendCtx = extendCtx;
     this.base = base;
     this.onUnauthorized = onUnauthorized;
     this.cleanups = [];
@@ -286,15 +319,16 @@ export class ModuleHost {
       onCleanup: registerCleanup,
       capabilities: manifest?.capabilities || [],
       navigate: (m, v) => { location.hash = `#/${m}${v ? `/${v}` : ''}`; },
+      ...(this.extendCtx ? this.extendCtx(manifest, view) || {} : {}),
     };
   }
 
   /** A skeleton, not a blank panel — an empty box reads as broken. */
   skeleton() {
-    this.el.innerHTML = `<div class="panel stack">
-      <div class="skeleton" style="height:18px;width:40%"></div>
-      <div class="skeleton" style="height:120px"></div>
-      <div class="skeleton" style="height:14px;width:70%"></div>
+    this.el.innerHTML = `<div class="panel pad stack" aria-busy="true" aria-label="Loading">
+      <div class="skeleton" style="height:16px;width:36%"></div>
+      <div class="skeleton" style="height:96px"></div>
+      <div class="skeleton" style="height:12px;width:64%"></div>
     </div>`;
   }
 

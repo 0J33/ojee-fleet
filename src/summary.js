@@ -113,6 +113,10 @@ function stateText(h, heat) {
   if (h.status === 'err') return heat ? 'Running hot' : 'Needs attention';
   if (h.status === 'warn') return heat ? 'Running warm' : 'Degraded';
   if (h.status === 'unknown') return 'Checking';
+  // Over the line but not for long enough to raise anything yet: say so,
+  // rather than "Healthy" beside a red temperature.
+  if (h.tempState === 'err') return 'Running hot';
+  if (h.tempState === 'warn') return 'Running warm';
   return 'Healthy';
 }
 
@@ -159,6 +163,7 @@ const sev = (s) => (s === 'err' || s === 'warn' || s === 'ok' ? s : null);
 function hostState(h) {
   if (h.away) return null;            // grey: neither fine nor broken
   if (!h.online && h.pending) return 'warn';
+  if (h.status === 'ok' && (h.tempState === 'err' || h.tempState === 'warn')) return 'warn';
   return sev(h.status === 'unknown' ? null : h.status);
 }
 
@@ -223,7 +228,8 @@ export function buildSummary(s) {
   const blipping = hosts.filter((h) => !h.online && h.pending);
   const degraded = hosts.filter((h) => h.online && h.status !== 'ok' && h.status !== 'unknown');
   const present = hosts.filter((h) => !h.away);
-  const services = present.flatMap((h) => h.services || []);
+  // Muted services (stopped on purpose, e.g. odysseus-*) are not counted at all.
+  const services = present.flatMap((h) => h.services || []).filter((x) => !(x.muted && !x.ok));
   const running = services.filter((x) => x.ok).length;
   const awayNote = away.length ? ` · ${away.map((h) => `${h.name} ${h.stateText === 'On Windows' ? 'on Windows' : 'away'}`).join(', ')}` : '';
 
