@@ -32,6 +32,9 @@ const S = {
   win: '2h',                // chart window for every card: '2h' | '24h'
   long: {},                 // host id -> { at, points } for 24h
   focus: null,              // view to scroll to after the next render
+  det: {},                  // host id -> details open
+  procs: {},                // host id -> { q, rows, busy }
+  logs: {},                 // host id -> { unit, text, busy }
 };
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -212,7 +215,7 @@ function hostCard(h, i) {
       : `${esc(h.error || 'Not answering')} · ${h.pending ? 'retrying' : `down since ${ago(h.downSince)}`}`}</div>`
     : '';
 
-  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery) ? `<div class="fl-foot fl-procs">
+  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery) ? `<div class="fl-procs">
       ${h.top?.length ? `<span>Top by CPU</span>${h.top.slice(0, 3).map((p) => `<b>${esc(p.name)} <span class="m">${p.cpu >= 10 ? Math.round(p.cpu) : p.cpu}%</span></b>`).join('')}` : ''}
       <span class="m fl-hw">${[
         h.fans?.length ? `fans ${h.fans.map((f) => f.toLocaleString('en-US')).join(' · ')} rpm` : null,
@@ -228,8 +231,60 @@ function hostCard(h, i) {
     </div>
     ${confirm}${rebootNote}${why}
     <div class="hm fl-hm">${cells(h).map((c) => `<div><div class="ml">${esc(c.l)}</div>${mv(c.v, c.u, c.s)}${c.viz}${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}</div>`).join('')}</div>
-    ${procs}
+    <div class="fl-foot">${procs || '<span></span>'}<button class="btn sm ghost fl-dtog" data-act="det" data-host="${esc(h.id)}" aria-expanded="${!!S.det[h.id]}">Details${ic('i-chevdown', 's fl-chev')}</button></div>
+    ${hostDetails(h)}
   </section>`;
+}
+
+const fmtB = (n) => {
+  if (!fin(n)) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let v = n; let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
+};
+
+/** Everything the card leaves out, for the host that asked: facts, every
+    filesystem and spare drive, graphics, battery, network, alerts still
+    being confirmed, processes and logs where the host serves them. */
+function hostDetails(h) {
+  if (!S.det[h.id]) return '';
+  const kv = (k, v) => (v == null || v === '' ? '' : `<div><dt>${esc(k)}</dt><dd>${v}</dd></div>`);
+  const facts = `<dl class="fl-kv">
+    ${kv('CPU', esc(h.cpu?.model || '—'))}${kv('OS', esc(h.os || '—'))}${kv('Hostname', esc(h.hostname || ''))}
+    ${kv('Sampled', esc(ago(h.at)))}${kv('Read by', esc(h.kind))}
+    ${h.net ? kv('Network', `<span class="m">↓ ${fmtB(h.net.rx)}/s · ↑ ${fmtB(h.net.tx)}/s</span>`) : ''}
+    ${h.battery ? kv('Battery', `<span class="m">${h.battery.pct}%</span> ${esc(h.battery.state || '')}${fin(h.battery.health) ? ` · health ${h.battery.health}%` : ''}${fin(h.battery.watts) ? ` · ${h.battery.watts} W` : ''}`) : ''}
+    ${(h.links || []).length ? kv('Links', h.links.map((l) => `<a class="fl-link" href="${esc(l.href)}" target="_blank" rel="noopener">${esc(l.label)}${ic('i-external')}</a>`).join(' ')) : ''}
+  </dl>`;
+  const fs = (h.disks || []).map((d) => `<div class="fl-fs"><div class="fl-fs-top"><span class="m">${esc(d.label)}</span><span class="m">${fmtB(d.used)} / ${fmtB(d.total)}${fin(d.free) ? ` · ${fmtB(d.free)} free` : ''}</span></div>
+      ${fin(d.pct) ? bar(d.pct, d.pct >= 96 ? 'err' : d.pct >= 90 ? 'warn' : null) : ''}
+      <div class="fl-fs-meta">${esc([d.device, d.fstype, d.model, d.remote ? 'network' : null].filter(Boolean).join(' · '))}</div></div>`).join('');
+  const spare = (h.drives || []).filter((d) => d.mounted === false || !(h.disks || []).length);
+  const drives = spare.map((d) => `<div class="fl-fs-meta">${esc(d.device)} · ${esc([d.model, d.kind].filter(Boolean).join(' · '))} · ${fmtB(d.size)} · ${(h.disks || []).length ? 'not mounted' : ''}${fin(d.tempC) ? ` ${rnd(d.tempC)} °C` : ''}</div>`).join('');
+  const gpus = !h.gpu && (h.gpus || []).length
+    ? `<div class="fl-fs-meta">${h.gpus.map((g) => esc(`${g.model}${g.driver ? ` · ${g.driver}` : ''}${g.inUse ? ' · in use' : ''}`)).join('<br>')}</div>` : '';
+  const pend = (h.pendingAlerts || []).length
+    ? `<div class="fl-det-sec"><h3>Waiting to confirm</h3>${h.pendingAlerts.map((a) => `<div class="fl-fs-meta">${esc(a.text)} · confirms ${a.confirmsAt ? esc(new Date(a.confirmsAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })) : 'soon'}</div>`).join('')}</div>` : '';
+  const muted = (h.muted || []).length ? `<div class="fl-fs-meta">Muted here: ${esc(h.muted.join(', '))}</div>` : '';
+
+  let procs = '';
+  if (h.capabilities?.processes) {
+    const p = S.procs[h.id] || {};
+    procs = `<div class="fl-det-sec"><div class="fl-det-h"><h3>Processes</h3><input class="input fl-q" type="search" placeholder="Filter" value="${esc(p.q || '')}" data-procq="${esc(h.id)}" aria-label="Filter processes"></div>
+      ${p.rows ? `<div class="scroll"><table class="t"><thead><tr><th>Process</th><th>User</th><th class="num">CPU</th><th class="num">Memory</th></tr></thead><tbody>
+        ${p.rows.map((r) => `<tr><td title="${esc(r.cmdline || r.name)}">${esc(r.name)}</td><td>${esc(r.user || '—')}</td><td class="num m">${(r.cpuPct ?? 0).toFixed(1)}%</td><td class="num m">${fmtB((r.memKb || 0) * 1024)}</td></tr>`).join('') || '<tr><td colspan="4">Nothing matches.</td></tr>'}
+      </tbody></table></div>` : '<div class="fl-fs-meta">Reading…</div>'}</div>`;
+  }
+  let logs = '';
+  if (h.capabilities?.logs) {
+    const l = S.logs[h.id] || {};
+    logs = `<div class="fl-det-sec"><h3>Logs</h3><div class="btns">${(h.services || []).slice(0, 16).map((x) => `<button class="chip" data-act="log" data-host="${esc(h.id)}" data-unit="${esc(x.id)}" aria-pressed="${l.unit === x.id}">${esc(x.id)}</button>`).join('')}</div>
+      ${l.unit ? `<pre class="fl-log">${l.busy ? 'Reading…' : esc(l.text || '(empty)')}</pre>` : ''}</div>`;
+  }
+  return `<div class="fl-det">
+    <div class="fl-det-grid"><div class="fl-det-sec"><h3>About</h3>${facts}${muted}</div>
+      <div class="fl-det-sec"><h3>Storage</h3>${fs || '<div class="fl-fs-meta">This host does not report storage.</div>'}${drives}${gpus ? `<h3>Graphics</h3>${gpus}` : ''}</div></div>
+    ${pend}${procs}${logs}</div>`;
 }
 
 function svcGroup(h) {
@@ -285,6 +340,8 @@ function render() {
   const stopped = services.filter((s) => s.ok === false).length;
   const scrollY = root.closest('.main')?.scrollTop;
 
+  const typing = document.activeElement?.dataset?.procq;
+  const caret = typing ? document.activeElement.selectionStart : null;
   const settled = S.rendered;
   S.rendered = true;
   root.innerHTML = `<div class="page fl${settled ? ' fl-settled' : ''}">
@@ -299,6 +356,10 @@ function render() {
       <div class="fl-svc-groups">${hosts.map(svcGroup).join('')}</div></section>
   </div>`;
   ui.placeSegs?.(root);
+  if (typing) {
+    const q = root.querySelector(`[data-procq="${CSS.escape(typing)}"]`);
+    if (q) { q.focus(); q.setSelectionRange(caret, caret); }
+  }
   if (S.focus) {
     const target = S.focus === 'services' ? root.querySelector('#fl-services') : S.focus === 'alerts' ? root.querySelector('.fl-alerts') : null;
     S.focus = null;
@@ -403,6 +464,34 @@ async function boot(hostId) {
   render();
 }
 
+async function loadProcs(hostId) {
+  const p = S.procs[hostId] || (S.procs[hostId] = { q: '' });
+  try {
+    const r = await ctx.api(`/hosts/${encodeURIComponent(hostId)}/processes?limit=30${p.q ? `&q=${encodeURIComponent(p.q)}` : ''}`);
+    p.rows = r.processes || r || [];
+  } catch (e) { p.rows = []; ctx.toast('warn', 'Could not list processes', e.message); }
+  render();
+}
+
+async function loadLog(hostId, unit) {
+  S.logs[hostId] = { unit, busy: true };
+  render();
+  try {
+    const r = await ctx.api(`/hosts/${encodeURIComponent(hostId)}/logs/${encodeURIComponent(unit)}`);
+    S.logs[hostId] = { unit, text: Array.isArray(r.lines) ? r.lines.join('\n') : (r.lines || r.error || '(nothing logged)') };
+  } catch (e) { S.logs[hostId] = { unit, text: e.message }; }
+  render();
+}
+
+function onInput(e) {
+  const q = e.target.closest?.('[data-procq]');
+  if (!q) return;
+  const id = q.dataset.procq;
+  (S.procs[id] || (S.procs[id] = {})).q = q.value;
+  clearTimeout(onInput.t);
+  onInput.t = setTimeout(() => loadProcs(id), 300);
+}
+
 async function loadLong() {
   const ids = (S.data?.hosts || []).map((h) => h.id).filter((id) => !S.long[id] || Date.now() - S.long[id].at > 60_000);
   await Promise.all(ids.map(async (id) => {
@@ -429,6 +518,14 @@ function onClick(e) {
   if (act === 'cancel') { S.confirm = null; render(); return; }
   if (act === 'boot-go') { boot(host); return; }
   if (act === 'restart') { restart(host, b.dataset.svc); return; }
+  if (act === 'det') {
+    S.det[host] = !S.det[host];
+    const h = S.data.hosts.find((x) => x.id === host);
+    if (S.det[host] && h?.capabilities?.processes && !S.procs[host]?.rows) loadProcs(host);
+    render();
+    return;
+  }
+  if (act === 'log') { loadLog(host, b.dataset.unit); return; }
   if (act === 'win') {
     S.win = b.dataset.v;
     if (S.win === '24h') loadLong();
@@ -476,6 +573,7 @@ export default {
     S.focus = ctx.view && ctx.view !== 'machines' ? ctx.view : null;
     root.addEventListener('click', onClick);
     root.addEventListener('toggle', onToggle, true);
+    root.addEventListener('input', onInput);
     render();
     [remoteBase] = await Promise.all([findRemote(), refresh()]);
     render();

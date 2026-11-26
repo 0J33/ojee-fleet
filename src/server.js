@@ -213,7 +213,9 @@ app.get('/api/hosts/:id/logs/:unit', async (req, res) => {
     return res.status(400).json({ error: 'bad unit name' });
   }
   try {
-    const url = new URL(`/api/journal/${encodeURIComponent(unit)}`, host.origin);
+    const url = host.kind === 'mirror'
+      ? new URL(`/api/hosts/${encodeURIComponent(host.mirror || host.id)}/logs/${encodeURIComponent(unit)}`, host.origin)
+      : new URL(`/api/journal/${encodeURIComponent(unit)}`, host.origin);
     const upstream = await fetch(url, {
       headers: host.token ? { authorization: `Bearer ${host.token}` } : {},
       signal: AbortSignal.timeout(10_000),
@@ -243,7 +245,9 @@ app.get('/api/hosts/:id/processes', async (req, res) => {
   const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 40));
   const q = String(req.query.q || '').slice(0, 64);
   try {
-    const url = new URL('/api/processes', host.origin);
+    const url = host.kind === 'mirror'
+      ? new URL(`/api/hosts/${encodeURIComponent(host.mirror || host.id)}/processes`, host.origin)
+      : new URL('/api/processes', host.origin);
     url.searchParams.set('limit', String(limit));
     if (q) url.searchParams.set('q', q);
     const upstream = await fetch(url, {

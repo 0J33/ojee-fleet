@@ -88,3 +88,25 @@
   .fl .fl-host,.fl .fl-confirm{animation:none}
   .fl .fl-chev{transition:none}
 }
+
+/* details: what the card leaves out */
+.fl .fl-dtog{margin-left:auto}
+.fl .fl-dtog[aria-expanded="true"] .fl-chev{transform:rotate(180deg)}
+.fl .fl-det{border-top:1px solid var(--line);padding:4px 16px 16px;display:grid;gap:4px}
+.fl .fl-det-grid{display:grid;gap:0 24px}
+@container app (min-width:1000px){.fl .fl-det-grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.fl .fl-det h3{font-size:12px;font-weight:600;color:var(--fg-2);margin:14px 0 8px}
+.fl .fl-det-h{display:flex;align-items:center;gap:12px}
+.fl .fl-det-h .fl-q{margin-left:auto;max-width:220px;height:30px}
+.fl .fl-kv{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 16px;margin:0;font-size:12.5px}
+.fl .fl-kv>div{display:contents}
+.fl .fl-kv dt{color:var(--fg-3)}
+.fl .fl-kv dd{margin:0;color:var(--fg-2);min-width:0;overflow-wrap:anywhere}
+.fl .fl-link{display:inline-flex;align-items:center;gap:4px;color:var(--fg);text-decoration:underline;text-decoration-color:var(--line-2);text-underline-offset:3px;margin-right:10px}
+.fl .fl-fs{margin-bottom:12px}
+.fl .fl-fs-top{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;color:var(--fg-2)}
+.fl .fl-fs-top>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl .fl-fs .bar{margin-top:6px}
+.fl .fl-fs-meta{font-size:11.5px;color:var(--fg-3);margin-top:4px;overflow-wrap:anywhere}
+.fl .fl-log{background:var(--term,#0c0c0d);color:var(--term-fg,#d8d8dc);font:12px/1.5 var(--font-mono);padding:12px;border-radius:6px;max-height:360px;overflow:auto;white-space:pre-wrap;margin:10px 0 0}
+.fl .fl-det table.t td{white-space:nowrap}

@@ -28,7 +28,7 @@ export async function probe(host) {
       role: host.role || r.role || '',
       kind: host.kind,
       alerts: [],
-      capabilities: { ...(r.capabilities || {}), actions: false, logs: false, processes: false },
+      capabilities: { ...(r.capabilities || {}), actions: false },
     };
   } catch (e) {
     return offlineHost(host, e.name === 'TimeoutError' ? 'timed out' : e.message);
