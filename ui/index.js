@@ -29,7 +29,7 @@ const S = {
   rebooting: {},            // host id -> { to, until }
   restarting: {},           // `${host}:${svc}` -> 'armed' | 'busy'
   open: {},                 // host id -> services expanded by hand
-  win: '2h',                // chart window for every card: '2h' | '24h'
+  win: (() => { try { return localStorage.getItem('fl-win') === '24h' ? '24h' : '2h'; } catch { return '2h'; } })(), // chart window: '2h' | '24h'
   long: {},                 // host id -> { at, points } for 24h
   focus: null,              // view to scroll to after the next render
   det: {},                  // host id -> details open
@@ -82,6 +82,20 @@ const pctState = (p) => (p >= 90 ? 'err' : p >= 80 ? 'warn' : null);
 const ICON = { Laptop: 'i-laptop', Server: 'i-server', VPS: 'i-cloud' };
 const hostIcon = (h) => h.icon || ICON[h.tag] || (h.battery ? 'i-laptop' : 'i-server');
 
+/** One decimal under 10 %, whole numbers above; "<0.1%" rather than "0%". */
+const pct1 = (v) => (!fin(v) ? '—' : v < 0.1 ? '<0.1%' : v < 10 ? `${v.toFixed(1)}%` : `${Math.round(v)}%`);
+
+/** The three busiest programs, by name (an older host may still send "Overwatch.exe" or a 15-character kernel name). */
+function topProcs(h) {
+  const seen = new Map();
+  for (const p of h.top || []) {
+    if (!p?.name || !fin(p.cpu)) continue;
+    const name = String(p.name).replace(/\.exe$/i, '');
+    seen.set(name, (seen.get(name) || 0) + p.cpu);
+  }
+  return [...seen].map(([name, cpu]) => ({ name, cpu: Math.min(100, cpu) })).sort((a, b) => b.cpu - a.cpu).slice(0, 3);
+}
+
 function hostState(h) {
   if (h.away) return null;
   if (!h.online) return h.pending ? 'warn' : 'err';
@@ -89,12 +103,41 @@ function hostState(h) {
   return h.status === 'err' ? 'err' : h.status === 'warn' ? 'warn' : h.status === 'ok' ? 'ok' : null;
 }
 
-/** The two hours of points to draw for a field, or the 24 h ones if picked. */
+/**
+ * The points to draw for a field, laid on a time axis: the 2 h window in
+ * one-minute slots, the 24 h one in five-minute slots (average; the peak for
+ * temperature). A slot with no reading is a gap, so a window that is only
+ * partly recorded (history younger than the window, a laptop that slept)
+ * shows as a short line on the right instead of being stretched across.
+ */
+const WIN = { '2h': { ms: 2 * 3600_000, step: 60_000 }, '24h': { ms: 24 * 3600_000, step: 300_000 } };
 function points(h, field) {
+  const w = WIN[S.win] || WIN['2h'];
+  let ts; let vs;
   if (S.win === '24h' && S.long[h.id]) {
-    return S.long[h.id].points.map((p) => (field === 'temp' ? (p.tempMax ?? p.temp) : p[field]));
+    const p = S.long[h.id].points;
+    ts = p.map((x) => x.t);
+    vs = p.map((x) => (field === 'temp' ? (x.tempMax ?? x.temp) : x[field]));
+  } else {
+    ts = h.series?.t || [];
+    vs = h.series?.[field] || [];
   }
-  return h.series?.[field] || [];
+  const n = Math.round(w.ms / w.step);
+  const end = Math.floor((S.data?.at || Date.now()) / w.step) * w.step;
+  const from = end - (n - 1) * w.step;
+  const out = new Array(n).fill(null);
+  const cnt = new Array(n).fill(0);
+  for (let i = 0; i < ts.length; i += 1) {
+    const v = vs[i];
+    if (!fin(v) || !fin(ts[i])) continue;
+    const k = Math.floor((ts[i] - from) / w.step);
+    if (k < 0 || k >= n) continue;
+    if (field === 'temp') out[k] = Math.max(out[k] ?? -Infinity, v);
+    else out[k] = (out[k] ?? 0) + v;
+    cnt[k] += 1;
+  }
+  if (field !== 'temp') for (let k = 0; k < n; k += 1) if (cnt[k]) out[k] /= cnt[k];
+  return out;
 }
 
 function sparkFor(h, field, opts) {
@@ -210,7 +253,7 @@ function hostCard(h, i) {
 
   const otherOs = w.boot ? (/windows/i.test(w.boot.label) ? 'Windows' : 'Linux') : '';
   const confirm = S.confirm === h.id && w.boot ? `<div class="confirm fl-confirm" role="group" aria-label="Confirm reboot">
-      <p><b>Reboot ${esc(h.name)} into ${otherOs}?</b> Sets a one-shot BootNext; the boot after that returns to ${otherOs === 'Windows' ? 'Linux' : 'Windows'} on its own.${h.top?.length ? ` Open now: ${esc(h.top.slice(0, 3).map((p) => p.name).join(', '))}.` : ''}</p>
+      <p><b>Reboot ${esc(h.name)} into ${otherOs}?</b> Sets a one-shot BootNext; the boot after that returns to ${otherOs === 'Windows' ? 'Linux' : 'Windows'} on its own.${topProcs(h).length ? ` Open now: ${esc(topProcs(h).map((p) => p.name).join(', '))}.` : ''}</p>
       <div class="acts"><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm danger solid" data-act="boot-go" data-host="${esc(h.id)}">Reboot now</button></div></div>` : '';
   const rebootNote = rb ? `<div class="confirm fl-confirm fl-rb"><p><b>Rebooting into ${esc(rb.to)}.</b> <span class="m" data-count="${rb.until}">${Math.max(0, Math.ceil((rb.until - Date.now()) / 1000))} s</span> — this card follows it back.</p></div>` : '';
 
@@ -220,8 +263,9 @@ function hostCard(h, i) {
       : `${esc(h.error || 'Not answering')} · ${h.pending ? 'retrying' : `down since ${ago(h.downSince)}`}`}</div>`
     : '';
 
-  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery || h.lid) ? `<div class="fl-procs">
-      ${h.top?.length ? `<span>Top by CPU</span>${h.top.slice(0, 3).map((p) => `<b>${esc(p.name)} <span class="m">${p.cpu >= 10 ? Math.round(p.cpu) : p.cpu}%</span></b>`).join('')}` : ''}
+  const top = topProcs(h);
+  const procs = (top.length || h.fans?.length || fin(h.cpu?.watts) || h.battery || h.lid) ? `<div class="fl-procs">
+      ${top.length ? `<span class="fl-top"><span class="fl-tl">Top by CPU</span>${top.map((p) => `<b title="${esc(p.name)} · ${pct1(p.cpu)} of the whole CPU"><span class="n">${esc(p.name)}</span><span class="m">${pct1(p.cpu)}</span></b>`).join('')}</span>` : ''}
       <span class="m fl-hw">${[
         h.fans?.length ? `fans ${h.fans.map((f) => f.toLocaleString('en-US')).join(' · ')} rpm` : null,
         fin(h.cpu?.watts) ? `CPU ${rnd(h.cpu.watts)} W` : null,
@@ -237,7 +281,7 @@ function hostCard(h, i) {
     </div>
     ${confirm}${rebootNote}${why}
     <div class="hm fl-hm">${cells(h).map((c) => `<div><div class="ml">${esc(c.l)}</div>${mv(c.v, c.u, c.s)}${c.viz}${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}</div>`).join('')}</div>
-    <div class="fl-foot">${procs || '<span></span>'}<button class="btn sm ghost fl-dtog" data-act="det" data-host="${esc(h.id)}" aria-expanded="${!!S.det[h.id]}">Details${ic('i-chevdown', 's fl-chev')}</button></div>
+    <div class="fl-foot">${procs || '<span class="fl-procs"></span>'}<button class="btn sm ghost fl-dtog" data-act="det" data-host="${esc(h.id)}" aria-expanded="${!!S.det[h.id]}">Details${ic('i-chevdown', 's fl-chev')}</button></div>
     ${hostDetails(h)}
   </section>`;
 }
@@ -353,6 +397,23 @@ function alertsBlock(d) {
       <div class="mm m">${esc(a.hostName || a.host)}</div></li>`).join('')}</ul></section>`;
 }
 
+/**
+ * The line under the shell's "Machines" title. The shell only draws its <p>
+ * when the summary headline is already loaded (a fresh load straight onto
+ * this page has none yet, so setSub had nowhere to write), and its 20 s
+ * summary refresh puts the headline back over any <p> not marked custom.
+ */
+function setHeaderSub(text) {
+  const ph = ctx.header.actions?.closest('.ph');
+  let p = ph?.querySelector(':scope > div:first-child > p');
+  if (!p && ph?.querySelector('h1')) {
+    p = document.createElement('p');
+    ph.querySelector('h1').after(p);
+  }
+  if (p) { p.textContent = text; p.dataset.custom = '1'; }
+  else ctx.header.setSub?.(text);
+}
+
 /** The page padding is the shell's when it already wraps us in one. */
 const pageCls = () => (ctx.ui3 || root.parentElement?.closest('.page') ? 'fl-in' : 'page');
 
@@ -384,7 +445,7 @@ function render() {
   // module fills its subtitle and its right side. Elsewhere it draws its own.
   const shellHead = ctx.header && ctx.header.actions;
   if (shellHead) {
-    ctx.header.setSub?.(sub);
+    setHeaderSub(sub);
     let box = ctx.header.actions.querySelector('.fl-hacts');
     if (!box) {
       box = document.createElement('div');
@@ -403,6 +464,7 @@ function render() {
       <div class="fl-svc-groups">${hosts.map(svcGroup).join('')}</div></section>
   </div>`;
   ui.placeSegs?.(root);
+  if (S.win === '24h' && hosts.some((h) => longStale(h.id))) loadLong();
   if (typing) {
     const q = root.querySelector(`[data-procq="${CSS.escape(typing)}"]`);
     if (q) { q.focus(); q.setSelectionRange(caret, caret); }
@@ -541,9 +603,21 @@ function onInput(e) {
   onInput.t = setTimeout(() => loadProcs(id), 300);
 }
 
+const longTried = {};
+/** A host's 24 h points are due (none yet, or a minute old) and not just tried. */
+const longStale = (id) => (!S.long[id] || Date.now() - S.long[id].at > 60_000) && !(Date.now() - (longTried[id] || 0) < 60_000);
+
 async function loadLong() {
-  const ids = (S.data?.hosts || []).map((h) => h.id).filter((id) => !S.long[id] || Date.now() - S.long[id].at > 60_000);
+  if (loadLong.busy) return;
+  loadLong.busy = true;
+  try { await fetchLong(); } finally { loadLong.busy = false; }
+}
+
+async function fetchLong() {
+  const ids = (S.data?.hosts || []).map((h) => h.id).filter(longStale);
+  if (!ids.length) return;
   await Promise.all(ids.map(async (id) => {
+    longTried[id] = Date.now();
     try {
       const r = await ctx.api(`/hosts/${encodeURIComponent(id)}/history?window=24h`);
       S.long[id] = { at: Date.now(), points: r.points || [] };
@@ -576,9 +650,11 @@ function onClick(e) {
   }
   if (act === 'log') { loadLog(host, b.dataset.unit); return; }
   if (act === 'win') {
-    S.win = b.dataset.v;
+    if (b.dataset.v === S.win) return;
+    S.win = b.dataset.v === '24h' ? '24h' : '2h';
+    try { localStorage.setItem('fl-win', S.win); } catch { /* private mode */ }
+    render();
     if (S.win === '24h') loadLong();
-    else render();
   }
 }
 

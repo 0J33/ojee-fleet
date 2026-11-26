@@ -45,10 +45,14 @@
 
 /* footer: top processes + hardware */
 .fl .fl-foot{display:flex;align-items:center;gap:6px 14px;padding:10px 16px;border-top:1px solid var(--line);flex-wrap:wrap;font-size:12.5px;color:var(--fg-3)}
-.fl .fl-procs b{color:var(--fg-2);font-weight:500;white-space:nowrap}
-.fl .fl-procs b .m{color:var(--fg-3);font-weight:400}
+.fl .fl-procs{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px}
+.fl .fl-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 14px;min-width:0}
+.fl .fl-tl{color:var(--fg-3)}
+.fl .fl-top b{display:inline-flex;align-items:baseline;gap:5px;min-width:0;max-width:100%;color:var(--fg-2);font-weight:500;white-space:nowrap}
+.fl .fl-top b .n{overflow:hidden;text-overflow:ellipsis;max-width:22ch}
+.fl .fl-top b .m{color:var(--fg-3);font-weight:400;font-variant-numeric:tabular-nums}
 .fl .fl-hw{margin-left:auto;white-space:nowrap}
-@container app (max-width:699px){.fl .fl-hw{margin-left:0;white-space:normal}}
+@container app (max-width:699px){.fl .fl-procs{flex-basis:100%;order:0}.fl .fl-hw{margin-left:0;white-space:normal}.fl .fl-tl{flex-basis:100%}}
 
 /* services: one <details> per machine, folded while healthy */
 .fl .fl-svc-groups{display:grid;gap:10px}

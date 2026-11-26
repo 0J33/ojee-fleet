@@ -435,19 +435,73 @@ function parseSwaps(text) {
 }
 
 /**
+ * What a person would call a process. /proc/<pid>/comm is the kernel's name,
+ * cut to 15 characters and often the runtime rather than the program
+ * (wine64-preloader, electron, node, python3), so the command line decides:
+ *   a Windows .exe under wine/Proton  -> the Steam/Heroic game folder, or the .exe's name
+ *   an Electron app                   -> the folder it is installed in
+ *   node/python running a script      -> the script (or its folder, for index.js/main.py)
+ * then a few well-known names get their usual spelling. Kernel threads
+ * (no command line) are "kernel".
+ */
+const PRETTY = {
+  chrome: 'Chrome', chromium: 'Chromium', 'google-chrome': 'Chrome', firefox: 'Firefox', 'isolated web co': 'Firefox', 'web content': 'Firefox',
+  code: 'VS Code', discord: 'Discord', spotify: 'Spotify', steam: 'Steam', steamwebhelper: 'Steam', slack: 'Slack',
+  'gnome-shell': 'GNOME Shell', xorg: 'Xorg', claude: 'Claude Code', dockerd: 'Docker', containerd: 'containerd',
+  pipewire: 'PipeWire', 'pipewire-pulse': 'PipeWire', wireplumber: 'WirePlumber', networkmanager: 'NetworkManager',
+  'nvidia-powerd': 'nvidia-powerd', obs: 'OBS', heroic: 'Heroic', gamescope: 'gamescope',
+  wineserver: 'Wine', 'wine64-preloader': 'Wine', 'wine-preloader': 'Wine', 'mongod-x64-zori': 'MongoDB', 'mongod-x64-zorin': 'MongoDB', mongod: 'MongoDB',
+};
+const WINE_HOUSEKEEPING = /^(explorer|services|winedevice|plugplay|svchost|rpcss|conhost|start|wineboot|tabtip|steam|steamwebhelper|services64|rundll32)$/i;
+const RUNTIMES = /^(node|nodejs|bun|deno|python[\d.]*|ruby|perl|java|bash|sh)$/;
+const GENERIC_SCRIPT = /^(index|main|server|app|cli|__main__|run)\.(m?js|cjs|ts|py)$/i;
+
+const base = (p) => String(p || '').split(/[\\/]/).filter(Boolean).pop() || '';
+
+export function processLabel(comm, argv = []) {
+  if (!argv.length || !argv[0]) return 'kernel';
+  const exe = argv.find((a) => /\.exe$/i.test(a));
+  if (exe) {
+    const unix = exe.replace(/\\/g, '/');
+    const game = unix.match(/steamapps\/common\/([^/]+)\//i) || unix.match(/\/Games\/Heroic\/([^/]+)\//i);
+    if (game) return game[1];
+    const name = base(unix).replace(/\.exe$/i, '');
+    return WINE_HOUSEKEEPING.test(name) ? 'Wine' : name;
+  }
+  const a0 = argv[0];
+  const electron = a0.match(/([^/]+)\/([^/]+)\/node_modules\/electron\//);
+  if (electron) return /^(desktop|app|electron|client|ui|shell)$/i.test(electron[2]) ? electron[1] : electron[2];
+  let name = base(a0.split(' ')[0]);
+  // comm is cut at 15; the command line's own name is whole.
+  if (!name || (comm && comm.length < 15 && !name.toLowerCase().startsWith(comm.toLowerCase()))) name = comm || name;
+  if (RUNTIMES.test(name)) {
+    const script = argv.slice(1).find((x) => x && !x.startsWith('-') && /[/.]/.test(x));
+    if (script) {
+      const parts = script.split('/').filter(Boolean);
+      const file = parts.pop();
+      const dir = parts.filter((x) => !/^(src|dist|bin|lib|build)$/.test(x)).pop();
+      return GENERIC_SCRIPT.test(file) && dir && dir !== 'app' ? dir : file;
+    }
+  }
+  return PRETTY[name.toLowerCase()] || name;
+}
+
+/**
  * The top processes by CPU right now: a delta of utime+stime per pid between
  * two samples, like top. `ps`'s %CPU is a lifetime average and would put a
  * browser started a week ago above the game that is pinning the CPU now.
+ * Percentages are of the whole machine (all cores = 100), summed over every
+ * process with the same label (a browser's or a game's many processes).
  */
 let procPrev = null;
 async function topProcesses(now, cores) {
-  const base = fs.existsSync(`${HOST_ROOT}/proc/1/stat`) ? `${HOST_ROOT}/proc` : '/proc';
+  const root = fs.existsSync(`${HOST_ROOT}/proc/1/stat`) ? `${HOST_ROOT}/proc` : '/proc';
   let pids = [];
-  try { pids = (await fsp.readdir(base)).filter((x) => /^\d+$/.test(x)); } catch { return null; }
+  try { pids = (await fsp.readdir(root)).filter((x) => /^\d+$/.test(x)); } catch { return null; }
   const ticks = new Map();
   const names = new Map();
   await Promise.all(pids.map(async (pid) => {
-    const st = await readOr(`${base}/${pid}/stat`, null);
+    const st = await readOr(`${root}/${pid}/stat`, null);
     if (!st) return;
     const close = st.lastIndexOf(')');
     const name = st.slice(st.indexOf('(') + 1, close);
@@ -459,17 +513,22 @@ async function topProcesses(now, cores) {
   procPrev = { ticks, at: now };
   if (!was || now <= was.at) return null;
   const secs = (now - was.at) / 1000;
-  const byName = new Map();
+  const busy = [];
   for (const [pid, t] of ticks) {
     const before = was.ticks.get(pid);
     if (before == null || t < before) continue;
     const pctAll = ((t - before) / 100 / secs) * 100 / (cores || 1);
-    if (pctAll <= 0) continue;
-    const n = names.get(pid);
-    byName.set(n, (byName.get(n) || 0) + pctAll);
+    if (pctAll > 0) busy.push([pid, pctAll]);
   }
-  return [...byName].sort((a, b) => b[1] - a[1]).slice(0, 5)
-    .map(([name, p]) => ({ name, cpu: Math.round(p * 10) / 10 }));
+  const byName = new Map();
+  await Promise.all(busy.map(async ([pid, pct]) => {
+    const raw = await readOr(`${root}/${pid}/cmdline`, '');
+    const argv = String(raw || '').split('\0').filter((x, i, all) => x || i < all.length - 1);
+    const label = processLabel(names.get(pid), argv);
+    byName.set(label, (byName.get(label) || 0) + pct);
+  }));
+  return [...byName].filter(([, p]) => p >= 0.05).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([name, p]) => ({ name, cpu: Math.round(Math.min(100, p) * 10) / 10 }));
 }
 
 export async function probe(host) {

@@ -209,3 +209,17 @@ test('teg adapter — a check that does not answer keeps the failed units it las
   const third = await withFetch(fakeFetch({ ...full, '/api/checks': { failed: [] } }), () => teg.probe(host));
   assert.equal(third.alerts.filter((a) => a.kind === 'unit-failed').length, 0);
 });
+
+test('top processes are named the way a person would name them', async () => {
+  const { processLabel: L } = await import('../src/adapters/local.js');
+  assert.equal(L('wine64-preloade', ['Z:\\home\\o\\.steam\\steam\\steamapps\\common\\Overwatch\\Overwatch.exe']), 'Overwatch');
+  assert.equal(L('wine64-preloade', ['C:\\Program Files\\Battle.net\\Battle.net.exe']), 'Battle.net');
+  assert.equal(L('wineserver', ['/usr/bin/wineserver']), 'Wine');
+  assert.equal(L('electron', ['/home/o/bin/ojee-console-app/node_modules/electron/dist/electron', '--hidden', '.']), 'ojee-console-app');
+  assert.equal(L('electron', ['/x/ojee-health-app/desktop/node_modules/electron/dist/electron --type=renderer']), 'ojee-health-app');
+  assert.equal(L('chrome', ['/opt/google/chrome/chrome --type=renderer']), 'Chrome');
+  assert.equal(L('kworker/u64:2', []), 'kernel');
+  assert.equal(L('mongod-x64-zori', ['/opt/mongod-x64-zorin']), 'MongoDB');
+  assert.equal(L('node', ['node', '/home/o/tools/watch.js']), 'watch.js');
+  assert.equal(L('node', ['/usr/bin/node', '/home/o/ojee-fleet/src/server.js']), 'ojee-fleet');
+});
