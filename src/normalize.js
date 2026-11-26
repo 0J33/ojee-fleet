@@ -238,8 +238,11 @@ export function deriveAlerts(h, limits = LIMITS) {
 export function applyMutes(alerts, mute, services) {
   if (!mute?.length && !services?.length) return alerts;
   const kinds = new Set(mute || []);
-  const quiet = new Set(services || []);
-  return alerts.filter((a) => !kinds.has(a.kind) && !(a.service && quiet.has(a.service)));
+  // A trailing * matches a prefix: "odysseus-*" quiets a whole compose project.
+  const exact = new Set((services || []).filter((x) => !x.endsWith('*')));
+  const prefixes = (services || []).filter((x) => x.endsWith('*')).map((x) => x.slice(0, -1));
+  const quiet = (svc) => exact.has(svc) || prefixes.some((p) => svc.startsWith(p));
+  return alerts.filter((a) => !kinds.has(a.kind) && !(a.service && quiet(a.service)));
 }
 
 /** err beats warn beats ok — for rolling a list of things up into one word. */

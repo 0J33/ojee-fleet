@@ -317,7 +317,22 @@ function svcGroup(h) {
 }
 
 function alertsBlock(d) {
-  const list = d.alerts || [];
+  // Several stopped services on one machine are one thing to look at.
+  const list = [];
+  const svc = new Map();
+  for (const a of d.alerts || []) {
+    if (a.kind !== 'service-down') { list.push(a); continue; }
+    if (!svc.has(a.host)) { svc.set(a.host, []); list.push({ group: a.host }); }
+    svc.get(a.host).push(a);
+  }
+  for (let i = 0; i < list.length; i += 1) {
+    if (!list[i].group) continue;
+    const g = svc.get(list[i].group);
+    list[i] = g.length === 1 ? g[0] : {
+      kind: 'service-down', severity: g.some((x) => x.severity === 'err') ? 'err' : 'warn',
+      text: `${g.length} services stopped on ${g[0].hostName}`, hint: g.map((x) => x.service).join(', '), host: g[0].host, hostName: g[0].hostName,
+    };
+  }
   if (!list.length) return '';
   return `<section class="sec fl-alerts"><div class="sh"><h2>Needs attention</h2><span class="cnt${list.some((a) => a.severity === 'err') ? ' err' : ''}">${list.length}</span></div>
     <ul class="panel needs">${list.map((a) => `<li class="need"><span class="sev ${a.severity === 'err' ? 'err' : 'warn'}">${ic(a.kind.includes('temp') ? 'i-temp' : a.kind === 'unreachable' ? 'i-power' : a.kind.startsWith('disk') ? 'i-archive' : 'i-alert', '')}</span>
@@ -325,11 +340,14 @@ function alertsBlock(d) {
       <div class="mm m">${esc(a.hostName || a.host)}</div></li>`).join('')}</ul></section>`;
 }
 
+/** The page padding is the shell's when it already wraps us in one. */
+const pageCls = () => (root.parentElement?.closest('.page') ? 'fl-in' : 'page');
+
 function render() {
   if (!root || stopSession) return;
   const d = S.data;
   if (!d) {
-    root.innerHTML = `<div class="page fl"><div class="ph"><div><h1>Machines</h1><p>${S.error ? esc(S.error) : 'Reading every machine…'}</p></div></div>
+    root.innerHTML = `<div class="${pageCls()} fl"><div class="ph"><div><h1>Machines</h1><p>${S.error ? esc(S.error) : 'Reading every machine…'}</p></div></div>
       ${S.error ? `<div class="panel"><div class="empty">${ic('i-alert', '')}<b>Could not read the fleet</b><p>${esc(S.error)}</p><button class="btn sm" data-act="retry">Try again</button></div></div>` : '<div class="fl-hosts">' + '<div class="panel skeleton fl-sk"></div>'.repeat(3) + '</div>'}</div>`;
     return;
   }
@@ -344,7 +362,7 @@ function render() {
   const caret = typing ? document.activeElement.selectionStart : null;
   const settled = S.rendered;
   S.rendered = true;
-  root.innerHTML = `<div class="page fl${settled ? ' fl-settled' : ''}">
+  root.innerHTML = `<div class="${pageCls()} fl${settled ? ' fl-settled' : ''}">
     <div class="ph"><div><h1>Machines</h1><p>${sub}</p></div>
       <div class="acts"><div class="seg sm" data-seg="fl-win" aria-label="Chart window"><span class="ind"></span>
         <button data-act="win" data-v="2h" aria-pressed="${S.win === '2h'}">2 h</button>

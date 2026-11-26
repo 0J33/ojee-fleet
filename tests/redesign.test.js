@@ -134,3 +134,9 @@ test('zram is told apart from swap on disk', () => {
   const z = parseSwaps('Filename Type Size Used Priority\n/swapfile file 41943036 0 -1\n/dev/zram0 partition 16777212 340 5\n');
   assert.deepEqual(z, { used: 340 * 1024, total: 16777212 * 1024 });
 });
+
+test('muteServices takes a prefix: a compose project switched off on purpose', async () => {
+  const { applyMutes } = await import('../src/normalize.js');
+  const alerts = [{ kind: 'service-down', service: 'odysseus-ntfy-1' }, { kind: 'service-down', service: 'caddy' }];
+  assert.deepEqual(applyMutes(alerts, [], ['odysseus-*']).map((a) => a.service), ['caddy']);
+});
