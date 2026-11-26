@@ -191,9 +191,10 @@ function hostCard(h, i) {
   const sub = [
     `<span>${esc(h.role || '')}${h.os ? ` · ${esc(h.os)}` : ''}</span>`,
     h.online && up ? `<span class="m">up ${up}</span>` : '',
-    // Round trip from HP. Coloured on the host's own baseline: ~220 ms is
-    // disinteg's normal (Canada), so it reads as plain text there.
-    fin(h.latencyMs) ? `<span class="m fl-lat"${h.latencyState && h.latencyState !== 'ok' ? ` style="--c:${col(h.latencyState)}"` : ''} title="Round trip from HP${h.limits?.latencyWarnMs ? ` · normal below ${h.limits.latencyWarnMs} ms here` : ''}">${rnd(h.latencyMs)} ms</span>` : '',
+    // Round trip from HP, only when it says something (a machine on the home
+    // network answers in a few ms). Coloured on the host's own baseline:
+    // ~220 ms is disinteg's normal (Canada), so it reads as plain text there.
+    fin(h.latencyMs) && h.latencyMs >= 20 ? `<span class="m fl-lat"${h.latencyState && h.latencyState !== 'ok' ? ` style="--c:${col(h.latencyState)}"` : ''} title="Round trip from HP${h.latencyState === 'ok' ? ' · normal for this machine' : ''}">${rnd(h.latencyMs)} ms from HP</span>` : '',
     !h.online && h.lastSeen ? `<span class="m">last seen ${ago(h.lastSeen)}</span>` : '',
     w.locked === true ? `<span class="fl-lock">${ic('i-lock')}Locked</span>` : w.locked === false ? `<span class="fl-lock">${ic('i-unlock')}Unlocked</span>` : '',
   ].filter(Boolean).join('');

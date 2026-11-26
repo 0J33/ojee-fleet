@@ -144,7 +144,8 @@ export function decorate(snap, { hosts = [], store = null, remote = null } = {})
       icon: /^i-[a-z0-9-]+$/.test(cfg.icon || '') ? cfg.icon : null,
       roaming: cfg.roaming === true,
       latencyMs,
-      latencyState: latencyMs == null ? null : latencyMs >= (limits.latencyErrMs ?? LIMITS.latencyErrMs) ? 'err' : latencyMs >= (limits.latencyWarnMs ?? LIMITS.latencyWarnMs) ? 'warn' : 'ok',
+      // A roaming laptop's round trip is wherever it happens to be: never coloured.
+      latencyState: latencyMs == null || cfg.roaming === true ? null : latencyMs >= (limits.latencyErrMs ?? LIMITS.latencyErrMs) ? 'err' : latencyMs >= (limits.latencyWarnMs ?? LIMITS.latencyWarnMs) ? 'warn' : 'ok',
       remote: r,
       series: series2h(store, h.id),
       tempState: tempState(h.cpu?.tempC, limits),
