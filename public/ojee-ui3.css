@@ -675,4 +675,5 @@ html{touch-action:manipulation}
    safe-area spacing came out wrong until the bar itself was scrolled. */
 html:has(body>.shell),html:has(#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
 body:has(>.shell),body:has(>#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
-.shell{position:fixed;inset:0;height:auto}
+.shell{position:fixed;top:0;left:0;right:0;bottom:auto;height:var(--app-h,100vh)}
+@supports (height:100dvh){.shell{height:var(--app-h,100dvh)}}

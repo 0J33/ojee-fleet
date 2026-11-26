@@ -85,6 +85,23 @@ export function spark(points, { status = null, threshold = null, min = null, max
  * hands a scroll that starts on a short sheet (or one already at its top) to
  * whatever is underneath. Counted, so nested sheets release in order.
  */
+/**
+ * The app frame's height comes from the window, not from CSS viewport units:
+ * in an iPhone home-screen web app, 100dvh / inset:0 can come out shorter than
+ * the screen, leaving the bottom bar floating above an empty band. innerHeight
+ * is what iOS actually gives the page. Kept current on every kind of resize.
+ */
+function syncAppHeight() {
+  const h = Math.round(window.innerHeight);
+  if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
+}
+if (typeof window !== 'undefined' && !window.__ojeeAppH) {
+  window.__ojeeAppH = true;
+  syncAppHeight();
+  for (const ev of ['resize', 'orientationchange', 'pageshow']) window.addEventListener(ev, () => { syncAppHeight(); setTimeout(syncAppHeight, 250); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) syncAppHeight(); });
+}
+
 let locks = 0;
 export function lockScroll(on) {
   locks = Math.max(0, locks + (on ? 1 : -1));
