@@ -133,11 +133,18 @@ export function decorate(snap, { hosts = [], store = null, remote = null } = {})
     });
     const heat = alerts.some((a) => HEAT.has(a.kind));
     const r = remote?.forHost(cfg) || null;
+    // Round trip to whichever half of the machine answers (Remote pings it).
+    const live = r?.devices?.find((x) => x.online && Number.isFinite(x.latencyMs)) || null;
+    const latencyMs = h.online && live ? live.latencyMs : null;
     const d = {
       ...h,
       alerts,
       hostname: cfg.hostname || null,
       tag: cfg.tag || null,
+      icon: /^i-[a-z0-9-]+$/.test(cfg.icon || '') ? cfg.icon : null,
+      roaming: cfg.roaming === true,
+      latencyMs,
+      latencyState: latencyMs == null ? null : latencyMs >= (limits.latencyErrMs ?? LIMITS.latencyErrMs) ? 'err' : latencyMs >= (limits.latencyWarnMs ?? LIMITS.latencyWarnMs) ? 'warn' : 'ok',
       remote: r,
       series: series2h(store, h.id),
       tempState: tempState(h.cpu?.tempC, limits),
@@ -195,7 +202,7 @@ function hostRow(h) {
   const row = {
     id: h.id,
     name: h.name,
-    icon: h.tag === 'Laptop' ? 'i-laptop' : h.tag === 'VPS' ? 'i-cloud' : 'i-server',
+    icon: h.icon || (h.tag === 'Laptop' ? 'i-laptop' : h.tag === 'VPS' ? 'i-cloud' : h.battery ? 'i-laptop' : 'i-server'),
     tag: h.remote?.os === 'windows' && h.away ? 'Windows' : (h.tag || null),
     status: hostState(h),
     statusText: h.stateText,

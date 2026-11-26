@@ -8,8 +8,10 @@
     "local (this machine: /proc, /sys, docker.sock), satellite (src/satellite.js on",
     "another machine), mirror (a host as another fleet reads it).",
     "",
-    "name is what every page calls the machine (LOQ, HP, disinteg); hostname and",
-    "role are shown under it; tag is the small label (Laptop, Server, VPS).",
+    "name is what every page calls the machine (LOQ, HP, disinteg); tag is the short",
+    "identity beside it on the overview and the card (Main laptop, Home server,",
+    "Canada); role is the line under it saying what the machine is; icon picks its",
+    "glyph (i-laptop, i-server, i-cloud). hostname shows in Details.",
     "",
     "remote lists the ojee-remote device ids that reach this machine (Screen,",
     "Shell, Files, lock state); a dual-boot machine lists both halves and the",
@@ -17,7 +19,8 @@
     "",
     "limits overrides src/normalize.js LIMITS for one host: tempWarnC/tempErrC",
     "(colour), cpuTempC/cpuCritC/gpuTempC + heatHoldMs (heat must be HELD to",
-    "alert), diskPct, memPct, swapPct, batteryPct. The console's settings",
+    "alert), diskPct, memPct, swapPct, batteryPct, latencyWarnMs/latencyErrMs (colour",
+    "of the round trip from HP; never an alert). The console's settings",
     "(thresholds of fleet.* kinds) override every host.",
     "",
     "mute lists alert kinds this host should never raise; muteServices names",
@@ -30,19 +33,20 @@
     {
       "id": "loq",
       "name": "LOQ",
-      "role": "Lenovo LOQ · the machine I work on",
+      "tag": "Main laptop",
+      "icon": "i-laptop",
+      "role": "Lenovo LOQ · dual boot Linux/Windows · moves around",
+      "hostname": "ojee-loq-zorin",
       "kind": "satellite",
       "origin": "http://100.81.241.55:8303",
       "enabled": true,
-      "mute": [
-        "cpu-throttle"
-      ],
       "roaming": true,
-      "hostname": "ojee-loq-zorin",
-      "tag": "Laptop",
       "remote": [
         "loq-linux",
         "loq-windows"
+      ],
+      "mute": [
+        "cpu-throttle"
       ],
       "limits": {
         "tempWarnC": 85,
@@ -52,24 +56,40 @@
     {
       "id": "hp",
       "name": "HP",
-      "role": "Home lab · always on",
+      "tag": "Home server",
+      "icon": "i-server",
+      "role": "Old HP laptop · lid closed, always on · runs the console",
+      "hostname": "ojee-hp-zorin",
       "kind": "local",
       "enabled": true,
-      "hostname": "ojee-hp-zorin",
-      "tag": "Server",
       "remote": [
         "hp"
       ],
       "mute": [
-        "cpu-throttle"
+        "cpu-throttle",
+        "battery"
       ]
     },
     {
       "id": "disinteg",
       "name": "disinteg",
-      "role": "Games, APIs and the NAS · Canada",
+      "tag": "Canada",
+      "icon": "i-cloud",
+      "role": "Old desktop at a friend's house in Canada · remote",
       "kind": "teg",
       "origin": "https://tegtech-api.ojee.net",
+      "enabled": true,
+      "remote": [
+        "disinteg"
+      ],
+      "muteServices": [
+        "factorio",
+        "terraria"
+      ],
+      "limits": {
+        "latencyWarnMs": 450,
+        "latencyErrMs": 900
+      },
       "links": [
         {
           "label": "teg dashboard",
@@ -79,15 +99,6 @@
           "label": "storage",
           "href": "https://storage.ojee.net"
         }
-      ],
-      "enabled": true,
-      "tag": "VPS",
-      "remote": [
-        "disinteg"
-      ],
-      "muteServices": [
-        "factorio",
-        "terraria"
       ]
     }
   ],

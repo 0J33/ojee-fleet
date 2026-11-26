@@ -80,7 +80,7 @@ const pctState = (p) => (p >= 90 ? 'err' : p >= 80 ? 'warn' : null);
 /* ── what a host looks like ───────────────────────────────────────────── */
 
 const ICON = { Laptop: 'i-laptop', Server: 'i-server', VPS: 'i-cloud' };
-const hostIcon = (h) => ICON[h.tag] || (h.battery ? 'i-laptop' : 'i-server');
+const hostIcon = (h) => h.icon || ICON[h.tag] || (h.battery ? 'i-laptop' : 'i-server');
 
 function hostState(h) {
   if (h.away) return null;
@@ -119,7 +119,7 @@ function primaryDisk(h) {
 function cells(h) {
   const L = h.limits || {};
   const cpu = h.cpu || {};
-  const cores = cpu.cores ? `${cpu.cores} ${h.tag === 'VPS' ? 'threads' : 'cores'}` : null;
+  const cores = cpu.cores ? `${cpu.cores} cores` : null;
   const load = Array.isArray(cpu.load) ? `load ${cpu.load[0].toFixed(2)}` : null;
 
   const mem = h.mem || {};
@@ -191,6 +191,9 @@ function hostCard(h, i) {
   const sub = [
     `<span>${esc(h.role || '')}${h.os ? ` · ${esc(h.os)}` : ''}</span>`,
     h.online && up ? `<span class="m">up ${up}</span>` : '',
+    // Round trip from HP. Coloured on the host's own baseline: ~220 ms is
+    // disinteg's normal (Canada), so it reads as plain text there.
+    fin(h.latencyMs) ? `<span class="m fl-lat"${h.latencyState && h.latencyState !== 'ok' ? ` style="--c:${col(h.latencyState)}"` : ''} title="Round trip from HP${h.limits?.latencyWarnMs ? ` · normal below ${h.limits.latencyWarnMs} ms here` : ''}">${rnd(h.latencyMs)} ms</span>` : '',
     !h.online && h.lastSeen ? `<span class="m">last seen ${ago(h.lastSeen)}</span>` : '',
     w.locked === true ? `<span class="fl-lock">${ic('i-lock')}Locked</span>` : w.locked === false ? `<span class="fl-lock">${ic('i-unlock')}Unlocked</span>` : '',
   ].filter(Boolean).join('');
@@ -212,16 +215,17 @@ function hostCard(h, i) {
 
   const why = !h.online
     ? `<div class="fl-why">${h.away
-      ? (w.os === 'windows' ? `Running Windows${w.screen?.online ? ' — Screen works' : ''}. These are the last Linux readings, from ${ago(h.lastSeen)}.` : `Away since ${ago(h.lastSeen)}. These are its last readings.`)
+      ? (w.os === 'windows' ? `Running Windows${w.screen?.online ? ' — Screen works' : ''}. These are the last Linux readings, from ${ago(h.lastSeen)}.` : `Asleep or away since ${ago(h.lastSeen)} — normal for a laptop that moves around. These are its last readings.`)
       : `${esc(h.error || 'Not answering')} · ${h.pending ? 'retrying' : `down since ${ago(h.downSince)}`}`}</div>`
     : '';
 
-  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery) ? `<div class="fl-procs">
+  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery || h.lid) ? `<div class="fl-procs">
       ${h.top?.length ? `<span>Top by CPU</span>${h.top.slice(0, 3).map((p) => `<b>${esc(p.name)} <span class="m">${p.cpu >= 10 ? Math.round(p.cpu) : p.cpu}%</span></b>`).join('')}` : ''}
       <span class="m fl-hw">${[
         h.fans?.length ? `fans ${h.fans.map((f) => f.toLocaleString('en-US')).join(' · ')} rpm` : null,
         fin(h.cpu?.watts) ? `CPU ${rnd(h.cpu.watts)} W` : null,
         h.battery ? `battery ${h.battery.pct}%${h.battery.state ? ` ${h.battery.state}` : ''}` : null,
+        h.lid ? `lid ${h.lid}` : null,
       ].filter(Boolean).join(' · ')}</span></div>` : '';
 
   return `<section class="panel clip fl-host${h.online ? '' : ' fl-stale'}" data-host="${esc(h.id)}" style="--i:${i}">
@@ -254,6 +258,8 @@ function hostDetails(h) {
     ${kv('CPU', esc(h.cpu?.model || '—'))}${kv('OS', esc(h.os || '—'))}${kv('Hostname', esc(h.hostname || ''))}
     ${kv('Sampled', esc(ago(h.at)))}${kv('Read by', esc(h.kind))}
     ${h.net ? kv('Network', `<span class="m">↓ ${fmtB(h.net.rx)}/s · ↑ ${fmtB(h.net.tx)}/s</span>`) : ''}
+    ${fin(h.latencyMs) ? kv('Round trip', `<span class="m">${rnd(h.latencyMs)} ms</span> from HP${h.latencyState === 'ok' && h.latencyMs >= 100 ? ' · normal for this machine' : ''}`) : ''}
+    ${h.lid ? kv('Lid', esc(h.lid)) : ''}
     ${h.battery ? kv('Battery', `<span class="m">${h.battery.pct}%</span> ${esc(h.battery.state || '')}${fin(h.battery.health) ? ` · health ${h.battery.health}%` : ''}${fin(h.battery.watts) ? ` · ${h.battery.watts} W` : ''}`) : ''}
     ${(h.links || []).length ? kv('Links', h.links.map((l) => `<a class="fl-link" href="${esc(l.href)}" target="_blank" rel="noopener">${esc(l.label)}${ic('i-external')}</a>`).join(' ')) : ''}
   </dl>`;

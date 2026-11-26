@@ -74,6 +74,26 @@ async function battery() {
   return null;
 }
 
+/* ── lid ───────────────────────────────────────────────────────────────── */
+
+/**
+ * A laptop's lid, from ACPI: 'open', 'closed' or null (no lid, or not
+ * exposed). /proc/acpi is not namespaced, so a container reads the host's.
+ * Informational only — HP runs with its lid shut on purpose.
+ */
+async function lid() {
+  for (const root of [...new Set([`${HOST_ROOT}/proc`, '/proc'])]) {
+    const base = `${root}/acpi/button/lid`;
+    let names = [];
+    try { names = await fsp.readdir(base); } catch { continue; }
+    for (const n of names.sort()) {
+      const m = /state:\s*(open|closed)/i.exec((await readOr(path.join(base, n, 'state'), '')) || '');
+      if (m) return m[1].toLowerCase();
+    }
+  }
+  return null;
+}
+
 /* ── cpu ───────────────────────────────────────────────────────────────── */
 
 function parseCpuLine(text) {
@@ -467,7 +487,7 @@ export async function probe(host) {
       physicalDisks(),
       battery(),
     ]);
-    const [fanList, swapsRaw] = await Promise.all([fans(), readOr('/proc/swaps', '')]);
+    const [fanList, swapsRaw, lidState] = await Promise.all([fans(), readOr('/proc/swaps', ''), lid()]);
     const storage = joinStorage(fsList, drives);
 
     const now = Date.now();
@@ -531,6 +551,7 @@ export async function probe(host) {
       gpu: g,
       net,
       battery: bat ? { pct: bat.pct, state: bat.state, watts: bat.watts, health: bat.health } : null,
+      lid: lidState,
       disks: storage.disks,
       drives: storage.drives,
       services: svcs,

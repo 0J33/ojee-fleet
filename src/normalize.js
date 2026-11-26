@@ -59,6 +59,12 @@ export const LIMITS = {
   swapPct: 60,           // swap in real use means something is over-committed
   batteryPct: 15,
   staleMs: 120_000,      // a sample this old is not a live reading
+  // Round trip from the console's server (HP) to the machine, as Remote
+  // measures it. Colour only, never an alert: a machine on the same network
+  // answers in a few ms; disinteg is in Canada and ~220 ms is its normal, so
+  // its config raises these (limits.latencyWarnMs / latencyErrMs).
+  latencyWarnMs: 150,
+  latencyErrMs: 400,
 };
 
 /**
