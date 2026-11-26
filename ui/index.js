@@ -1,738 +1,508 @@
 /* ============================================================
-   ojee-fleet — module UI.
+   ojee-fleet — Machines.
 
-   Four views over one payload. The server already decided what is
-   wrong and normalized three different APIs into one shape, so
-   nothing here parses a host-specific field — which is the whole
-   point of the split: adding a fourth machine is an adapter, not
-   a change to this file.
+   One page: a card per machine with the numbers that matter
+   (CPU, temperature on the host's own scale, memory, disk, GPU),
+   a two-hour line under each that survives a restart, the ways
+   in (Screen / Shell / Files, from ojee-remote), and for the
+   laptop that boots two systems, the switch between them. Below,
+   services grouped by machine and folded away while healthy.
 
-   Live updates come over SSE with a polling fallback, because an
-   SSE stream through two proxies is one misconfigured buffer away
-   from silently delivering nothing, and a monitoring page that
-   silently stops updating is worse than one that never claimed to.
+   Screen, Shell and Files open ojee-remote's own session pages
+   in place: its gateway still does the streaming, ssh and sftp,
+   so nothing about how those work changed — only where you find
+   them.
    ============================================================ */
-
-const el = (tag, attrs = {}, ...kids) => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (v === false || v == null) continue;
-    if (k === 'class') n.className = v;
-    else if (k === 'html') n.innerHTML = v;
-    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v === true ? '' : String(v));
-  }
-  for (const kid of kids.flat()) {
-    if (kid == null || kid === false) continue;
-    n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
-  }
-  return n;
-};
-
-const fmtBytes = (n) => {
-  if (!Number.isFinite(n)) return '—';
-  const u = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let v = n; let i = 0;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
-  return `${v >= 100 || i === 0 ? Math.round(v) : v.toFixed(1)} ${u[i]}`;
-};
-const fmtRate = (n) => (Number.isFinite(n) ? `${fmtBytes(n)}/s` : '—');
-const fmtPct = (n) => (Number.isFinite(n) ? `${Math.round(n)}%` : '—');
-const fmtTemp = (n) => (Number.isFinite(n) ? `${Math.round(n)}°C` : '—');
-const fmtUptime = (s) => {
-  if (!Number.isFinite(s) || s <= 0) return '—';
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (d) return `${d}d ${h}h`;
-  if (h) return `${h}h ${m}m`;
-  return `${m}m`;
-};
-const ago = (t) => {
-  if (!Number.isFinite(t)) return 'never';
-  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  return `${Math.round(s / 3600)}h ago`;
-};
-
-/* ── state ───────────────────────────────────────────────────────────── */
 
 let ctx = null;
 let root = null;
-let stream = null;
-let pollTimer = null;
+let ui = null;              // ojee-ui3.js helpers
+let stopSession = null;     // teardown of an open Screen / Shell / Files
+let remoteBase = null;      // where ojee-remote is mounted, if it is
+let tickTimer = null;
 
-const state = {
-  view: 'overview',
+const S = {
   data: null,
   error: null,
-  selected: null,        // host id, for the Hosts view
-  detail: null,          // full host + history
-  logUnit: null,
-  logText: '',
-  logBusy: false,
-  procs: null,
-  procsFor: null,
-  procQuery: '',
-  busyAction: null,
-  filter: '',
   live: false,
+  confirm: null,            // host id with an armed "reboot to other OS"
+  rebooting: {},            // host id -> { to, until }
+  restarting: {},           // `${host}:${svc}` -> 'armed' | 'busy'
+  open: {},                 // host id -> services expanded by hand
+  win: '2h',                // chart window for every card: '2h' | '24h'
+  long: {},                 // host id -> { at, points } for 24h
+  focus: null,              // view to scroll to after the next render
 };
 
-const api = async (path, opts = {}) => ctx.api(path.replace(/^\/api/, ''), opts);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const ic = (n, c = 's') => `<svg class="i ${c}" aria-hidden="true"><use href="#${n}"/></svg>`;
+const col = (s) => (s === 'err' ? 'var(--err)' : s === 'warn' ? 'var(--warn)' : s === 'ok' ? 'var(--ok)' : 'var(--fg-3)');
+const fin = Number.isFinite;
+const rnd = (v) => (fin(v) ? Math.round(v) : null);
 
-/* ── small pieces ────────────────────────────────────────────────────── */
-
-/* The design system's own dot, not one of ours. It already has ok/warn/err
-   and the pulse on err; a second implementation next to it is how two things
-   that mean the same thing end up looking different. */
-// `away` is the design system's bare dot: grey, no glow. Not the green that
-// says all is well, not the red that says come and look — a machine that is
-// somewhere else.
-const dot = (status) => el('span', {
-  class: status === 'away' ? 'dot'
-    : `dot dot--${status === 'err' ? 'err' : status === 'warn' ? 'warn' : 'ok'}`,
-  title: status,
-});
-
-/**
- * A labelled meter.
- *
- * The fill is `.bar .fill`, which is what the design system styles — this
- * shipped as `.bar-fill`, matched nothing, and every bar on the page rendered
- * as an empty track. Severity is a modifier ON THE FILL for the same reason.
- */
-const bar = (value, label, opts = {}) => {
-  const p = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : null;
-  const tone = p == null ? '' : p >= (opts.crit ?? 90) ? ' fill--err' : p >= (opts.warn ?? 75) ? ' fill--warn' : '';
-  return el('div', { class: 'fl-metric' },
-    el('div', { class: 'fl-metric-top' },
-      el('span', { class: 'label' }, label),
-      el('span', { class: 'fl-metric-val tnum' }, opts.text || fmtPct(p))),
-    el('div', { class: 'bar' },
-      el('span', { class: `fill${tone}`, style: `width:${p == null ? 0 : p}%` })));
+const gb = (b) => b / 1024 ** 3;
+function size(b, total) {
+  // One unit for the pair, chosen by the total: "1.31/1.82 TB", "9.1/16 GB".
+  if (!fin(b)) return { v: '—', u: '' };
+  const ref = fin(total) ? total : b;
+  const tb = ref >= 1024 ** 4;
+  const k = tb ? 1024 ** 4 : 1024 ** 3;
+  const f = (x) => { const v = x / k; return v >= 100 ? String(Math.round(v)) : v >= 10 ? v.toFixed(tb ? 2 : 0) : v.toFixed(tb ? 2 : 1); };
+  return { v: f(b), u: fin(total) ? `/${f(total)} ${tb ? 'TB' : 'GB'}` : (tb ? ' TB' : ' GB') };
+}
+const fmtUp = (s) => {
+  if (!fin(s) || s <= 0) return null;
+  const d = Math.floor(s / 86400); const h = Math.floor((s % 86400) / 3600); const m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
 };
+const ago = (t) => {
+  if (!fin(t)) return 'never';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} d ago`;
+};
+const clock = (t) => new Date(t).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-/**
- * A sparkline as an inline SVG polyline. Nulls break the line rather than
- * being drawn as zero — a gap is what a missing sample actually is, and a
- * dive to the floor is what a reader would otherwise see.
- */
-const spark = (samples, key, { height = 28, max = 100, unit = '%' } = {}) => {
-  const pts = samples.map((s, i) => [i, s[key]]);
-  const w = Math.max(1, samples.length - 1);
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('class', 'fl-spark');
-  svg.setAttribute('viewBox', `0 0 ${w} ${height}`);
-  svg.setAttribute('preserveAspectRatio', 'none');
-  let run = [];
-  const flush = () => {
-    if (run.length > 1) {
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
-      line.setAttribute('points', run.map(([x, y]) => `${x},${(1 - Math.min(y, max) / max) * height}`).join(' '));
-      svg.append(line);
+const mv = (v, u, s, cls = '') => `<div class="mv${cls ? ` ${cls}` : ''}"${s ? ` style="--c:${col(s)}"` : ''}>${esc(v)}${u ? `<span class="u">${esc(u)}</span>` : ''}</div>`;
+const tag = (t, s) => `<span class="tag${s ? ` ${s}` : ''}">${esc(t)}</span>`;
+const bar = (p, s) => {
+  const v = Math.max(0, Math.min(100, Number(p) || 0));
+  const c = s || (v >= 90 ? 'err' : v >= 80 ? 'warn' : null);
+  return `<div class="bar"${c ? ` style="--c:${col(c)}"` : ''}><i style="width:${v}%"></i></div>`;
+};
+const pctState = (p) => (p >= 90 ? 'err' : p >= 80 ? 'warn' : null);
+
+/* ── what a host looks like ───────────────────────────────────────────── */
+
+const ICON = { Laptop: 'i-laptop', Server: 'i-server', VPS: 'i-cloud' };
+const hostIcon = (h) => ICON[h.tag] || (h.battery ? 'i-laptop' : 'i-server');
+
+function hostState(h) {
+  if (h.away) return null;
+  if (!h.online) return h.pending ? 'warn' : 'err';
+  return h.status === 'err' ? 'err' : h.status === 'warn' ? 'warn' : h.status === 'ok' ? 'ok' : null;
+}
+
+/** The two hours of points to draw for a field, or the 24 h ones if picked. */
+function points(h, field) {
+  if (S.win === '24h' && S.long[h.id]) {
+    return S.long[h.id].points.map((p) => (field === 'temp' ? (p.tempMax ?? p.temp) : p[field]));
+  }
+  return h.series?.[field] || [];
+}
+
+function sparkFor(h, field, opts) {
+  const pts = points(h, field);
+  return ui.spark(pts, { height: 28, ...opts });
+}
+
+function heatNote(h) {
+  const a = (h.alerts || []).find((x) => x.kind === 'cpu-temp-critical') || (h.alerts || []).find((x) => x.kind === 'cpu-temp');
+  if (a?.heldMin) return `Above ${a.kind === 'cpu-temp-critical' ? h.limits.cpuCritC : h.limits.cpuTempC} °C for ${a.heldMin} min`;
+  const pend = (h.pendingAlerts || []).find((x) => x.kind === 'cpu-temp' || x.kind === 'cpu-temp-critical');
+  if (pend) return `Over ${h.limits.cpuTempC} °C · alert if it holds`;
+  return h.tempState === 'warn' ? 'Warm' : h.tempState === 'err' ? 'Hot' : 'Normal';
+}
+
+function primaryDisk(h) {
+  const d = (h.disks || []).filter((x) => fin(x.total) && !x.remote);
+  return d.find((x) => x.mount === '/') && d.length === 1 ? d[0]
+    : d.sort((a, b) => (b.pct ?? 0) - (a.pct ?? 0))[0] || null;
+}
+
+function cells(h) {
+  const L = h.limits || {};
+  const cpu = h.cpu || {};
+  const cores = cpu.cores ? `${cpu.cores} ${h.tag === 'VPS' ? 'threads' : 'cores'}` : null;
+  const load = Array.isArray(cpu.load) ? `load ${cpu.load[0].toFixed(2)}` : null;
+
+  const mem = h.mem || {};
+  const m = size(mem.used, mem.total);
+  const swapUsed = h.swap?.used;
+  const zram = h.zram;
+  const memNote = [
+    fin(swapUsed) && h.swap?.total ? (swapUsed < 64 * 1024 ** 2 ? 'Swap idle' : `Swap ${gb(swapUsed) >= 10 ? Math.round(gb(swapUsed)) : gb(swapUsed).toFixed(1)} GB`) : null,
+    zram?.total ? `zram ${Math.round((zram.used / zram.total) * 100)}%` : null,
+  ].filter(Boolean).join(' · ');
+
+  const d = primaryDisk(h);
+  const ds = d ? size(d.used, d.total) : null;
+  const free = d && fin(d.free) ? (d.free >= 1024 ** 4 ? `${(d.free / 1024 ** 4).toFixed(2)} TB free` : `${Math.round(gb(d.free))} GB free`) : null;
+  const diskNote = d ? [free, d.model ? d.model.replace(/\s+\d+\s?(GB|TB)$/i, '') : null].filter(Boolean).join(' · ') : '';
+  const diskName = d && d.mount && d.mount !== '/' ? d.mount.split('/').filter(Boolean).pop() : null;
+  const moreDisks = (h.disks || []).length > 1 ? ` · +${h.disks.length - 1}` : '';
+
+  const g = h.gpu;
+  const gName = g?.model ? g.model.replace(/^(NVIDIA |Intel\(R\) )/, '').replace(/ Laptop GPU$/, '').replace('GeForce ', '') : null;
+  const gNote = g ? [fin(g.tempC) ? `${rnd(g.tempC)} °C` : null, fin(g.watts) ? `${rnd(g.watts)} W` : null,
+    fin(g.vramUsed) && g.vramTotal ? `${(g.vramUsed / 1024 ** 3).toFixed(1)}/${Math.round(g.vramTotal / 1024 ** 3)} GB VRAM` : null].filter(Boolean).join(' · ') : '';
+
+  const temp = cpu.tempC;
+  return [
+    { l: 'CPU', v: fin(cpu.pct) ? String(rnd(cpu.pct)) : '—', u: '%',
+      viz: sparkFor(h, 'cpu', { min: 0, max: 100, label: 'CPU usage' }), note: [cores, load].filter(Boolean).join(' · ') },
+    { l: 'CPU temp', v: fin(temp) ? String(rnd(temp)) : '—', u: fin(temp) ? '°C' : '', s: h.tempState,
+      viz: fin(temp) || points(h, 'temp').some(fin)
+        ? sparkFor(h, 'temp', { status: h.tempState, threshold: L.cpuTempC, label: 'CPU temperature' })
+        : '<div class="hm-none">Not exposed by this host</div>',
+      note: fin(temp) ? heatNote(h) : '' },
+    { l: 'Memory', v: m.v, u: m.u, viz: fin(mem.pct) ? bar(mem.pct, pctState(mem.pct)) : '', note: memNote },
+    { l: diskName ? `Disk · ${diskName}` : 'Disk', v: ds ? ds.v : '—', u: ds ? ds.u : '', viz: d ? bar(d.pct, d.pct >= (L.diskCritPct || 96) ? 'err' : d.pct >= (L.diskPct || 90) ? 'warn' : null) : '', note: d ? `${diskNote}${moreDisks}` : '' },
+    { l: g ? `GPU · ${gName || 'GPU'}` : 'GPU', v: g && fin(g.pct) ? String(rnd(g.pct)) : '—', u: g && fin(g.pct) ? '%' : '',
+      viz: g && fin(g.pct) ? bar(g.pct, h.gpuTempState === 'err' ? 'err' : null) : `<div class="hm-none">${g ? 'No utilisation reported' : 'None'}</div>`, note: gNote },
+  ];
+}
+
+/* ── the ways in ──────────────────────────────────────────────────────── */
+
+function ways(h) {
+  const r = h.remote;
+  if (!r || !remoteBase) return { screen: null, shell: null, boot: null };
+  const live = r.devices.filter((d) => d.online || d.shellOnline);
+  const screen = r.devices.find((d) => d.screen && d.online) || r.devices.find((d) => d.screen && d.id === r.current) || r.devices.find((d) => d.screen);
+  const shell = r.devices.find((d) => d.shell && d.shellOnline) || r.devices.find((d) => d.shell);
+  const boot = live.map((d) => d.boot).find(Boolean) || null;
+  return { screen, shell, boot, os: r.os, locked: r.locked };
+}
+
+function actBtn(act, h, dev, label, icon, up) {
+  if (!dev) return '';
+  const off = !up;
+  return `<button class="btn sm${off ? ' fl-off' : ''}" data-act="${act}" data-host="${esc(h.id)}" data-dev="${esc(dev.id)}"
+    ${off ? 'aria-disabled="true"' : ''} title="${esc(off ? `${dev.name} is not answering` : `${label} · ${dev.name}`)}">${ic(icon)}${label}</button>`;
+}
+
+/* ── render ───────────────────────────────────────────────────────────── */
+
+function hostCard(h, i) {
+  const w = ways(h);
+  const state = hostState(h);
+  const osTag = w.os ? tag(w.os === 'windows' ? 'Windows' : 'Linux') : (h.tag ? tag(h.tag) : '');
+  const stateTag = h.away
+    ? tag(h.stateText)
+    : tag(h.stateText, state === 'ok' ? 'ok' : state);
+  const up = fmtUp(h.uptime);
+  const sub = [
+    `<span>${esc(h.role || '')}${h.os ? ` · ${esc(h.os)}` : ''}</span>`,
+    h.online && up ? `<span class="m">up ${up}</span>` : '',
+    !h.online && h.lastSeen ? `<span class="m">last seen ${ago(h.lastSeen)}</span>` : '',
+    w.locked === true ? `<span class="fl-lock">${ic('i-lock')}Locked</span>` : w.locked === false ? `<span class="fl-lock">${ic('i-unlock')}Unlocked</span>` : '',
+  ].filter(Boolean).join('');
+
+  const rb = S.rebooting[h.id];
+  const bootBtn = w.boot && !rb
+    ? `<button class="btn sm" data-act="boot" data-host="${esc(h.id)}" aria-expanded="${S.confirm === h.id}">${ic('i-power')}${esc(w.boot.label)}</button>` : '';
+  const acts = `<div class="btns fl-acts">
+    ${actBtn('screen', h, w.screen, 'Screen', 'i-monitor', w.screen?.online)}
+    ${actBtn('shell', h, w.shell, 'Shell', 'i-shell', w.shell?.shellOnline)}
+    ${actBtn('files', h, w.shell, 'Files', 'i-folder', w.shell?.shellOnline)}
+    ${bootBtn}</div>`;
+
+  const otherOs = w.boot ? (/windows/i.test(w.boot.label) ? 'Windows' : 'Linux') : '';
+  const confirm = S.confirm === h.id && w.boot ? `<div class="confirm fl-confirm" role="group" aria-label="Confirm reboot">
+      <p><b>Reboot ${esc(h.name)} into ${otherOs}?</b> Sets a one-shot BootNext; the boot after that returns to ${otherOs === 'Windows' ? 'Linux' : 'Windows'} on its own.${h.top?.length ? ` Open now: ${esc(h.top.slice(0, 3).map((p) => p.name).join(', '))}.` : ''}</p>
+      <div class="acts"><button class="btn sm" data-act="cancel">Cancel</button><button class="btn sm danger solid" data-act="boot-go" data-host="${esc(h.id)}">Reboot now</button></div></div>` : '';
+  const rebootNote = rb ? `<div class="confirm fl-confirm fl-rb"><p><b>Rebooting into ${esc(rb.to)}.</b> <span class="m" data-count="${rb.until}">${Math.max(0, Math.ceil((rb.until - Date.now()) / 1000))} s</span> — this card follows it back.</p></div>` : '';
+
+  const why = !h.online
+    ? `<div class="fl-why">${h.away
+      ? (w.os === 'windows' ? `Running Windows${w.screen?.online ? ' — Screen works' : ''}. These are the last Linux readings, from ${ago(h.lastSeen)}.` : `Away since ${ago(h.lastSeen)}. These are its last readings.`)
+      : `${esc(h.error || 'Not answering')} · ${h.pending ? 'retrying' : `down since ${ago(h.downSince)}`}`}</div>`
+    : '';
+
+  const procs = (h.top?.length || h.fans?.length || fin(h.cpu?.watts) || h.battery) ? `<div class="fl-foot fl-procs">
+      ${h.top?.length ? `<span>Top by CPU</span>${h.top.slice(0, 3).map((p) => `<b>${esc(p.name)} <span class="m">${p.cpu >= 10 ? Math.round(p.cpu) : p.cpu}%</span></b>`).join('')}` : ''}
+      <span class="m fl-hw">${[
+        h.fans?.length ? `fans ${h.fans.map((f) => f.toLocaleString('en-US')).join(' · ')} rpm` : null,
+        fin(h.cpu?.watts) ? `CPU ${rnd(h.cpu.watts)} W` : null,
+        h.battery ? `battery ${h.battery.pct}%${h.battery.state ? ` ${h.battery.state}` : ''}` : null,
+      ].filter(Boolean).join(' · ')}</span></div>` : '';
+
+  return `<section class="panel clip fl-host${h.online ? '' : ' fl-stale'}" data-host="${esc(h.id)}" style="--i:${i}">
+    <div class="fl-hh">
+      <div class="fl-who"><span class="sic">${ic(hostIcon(h), '')}</span>
+        <div><div class="sname fl-name">${esc(h.name)}${osTag}${stateTag}</div><div class="fl-sub">${sub}</div></div></div>
+      ${acts}
+    </div>
+    ${confirm}${rebootNote}${why}
+    <div class="hm fl-hm">${cells(h).map((c) => `<div><div class="ml">${esc(c.l)}</div>${mv(c.v, c.u, c.s)}${c.viz}${c.note ? `<div class="note">${esc(c.note)}</div>` : ''}</div>`).join('')}</div>
+    ${procs}
+  </section>`;
+}
+
+function svcGroup(h) {
+  const list = (h.services || []).slice().sort((a, b) => (a.ok === b.ok ? a.name.localeCompare(b.name) : a.ok ? 1 : -1));
+  if (!list.length) return '';
+  const down = list.filter((s) => s.ok === false);
+  const open = S.open[h.id] ?? down.length > 0;
+  const canRestart = h.capabilities?.actions && h.online;
+  const rows = list.map((s) => {
+    const key = `${h.id}:${s.id}`;
+    const r = S.restarting[key];
+    const mem = fin(s.memory) ? `${(s.memory / 1024 ** 2) >= 1024 ? (s.memory / 1024 ** 3).toFixed(1) + ' GB' : Math.round(s.memory / 1024 ** 2) + ' MB'}` : '';
+    const detail = s.ok === false
+      ? (s.downSince ? `stopped ${ago(s.downSince)}` : (s.detail || 'stopped'))
+      : (s.detail || '');
+    return `<div class="fl-svc${s.ok === false ? ' bad' : ''}">
+      <span class="dot ${s.ok === false ? (s.unknown ? 'warn' : 'err') : 'ok'}"></span>
+      <span class="fl-svc-n">${esc(s.name)}</span>
+      <span class="fl-svc-d m">${esc(detail)}</span>
+      <span class="fl-svc-m m">${esc(mem)}</span>
+      ${canRestart ? `<button class="btn sm ghost fl-rs" data-act="restart" data-host="${esc(h.id)}" data-svc="${esc(s.id)}" ${r === 'busy' ? 'aria-busy="true"' : ''}>${r === 'armed' ? 'Confirm' : r === 'busy' ? 'Restarting…' : `${ic('i-restart')}<span>Restart</span>`}</button>` : '<span></span>'}
+    </div>`;
+  }).join('');
+  return `<details class="panel clip fl-svcs" data-host="${esc(h.id)}" ${open ? 'open' : ''}>
+    <summary><span class="dot ${down.length ? 'err' : h.away ? '' : 'ok'}"></span><b>${esc(h.name)}</b>
+      <span class="m fl-count">${down.length ? `${down.length} stopped · ` : ''}${list.length - down.length}/${list.length} running</span>
+      ${h.away ? '<span class="tag">last known</span>' : ''}${ic('i-chevdown', 's fl-chev')}</summary>
+    <div class="fl-svc-list">${rows}</div>
+  </details>`;
+}
+
+function alertsBlock(d) {
+  const list = d.alerts || [];
+  if (!list.length) return '';
+  return `<section class="sec fl-alerts"><div class="sh"><h2>Needs attention</h2><span class="cnt${list.some((a) => a.severity === 'err') ? ' err' : ''}">${list.length}</span></div>
+    <ul class="panel needs">${list.map((a) => `<li class="need"><span class="sev ${a.severity === 'err' ? 'err' : 'warn'}">${ic(a.kind.includes('temp') ? 'i-temp' : a.kind === 'unreachable' ? 'i-power' : a.kind.startsWith('disk') ? 'i-archive' : 'i-alert', '')}</span>
+      <div class="b"><div class="t">${esc(a.heldMin ? `${a.text} for ${a.heldMin} min` : a.text)}${a.blocking ? tag('Blocking', 'err') : ''}</div>${a.hint ? `<div class="d">${esc(a.hint)}</div>` : ''}</div>
+      <div class="mm m">${esc(a.hostName || a.host)}</div></li>`).join('')}</ul></section>`;
+}
+
+function render() {
+  if (!root || stopSession) return;
+  const d = S.data;
+  if (!d) {
+    root.innerHTML = `<div class="page fl"><div class="ph"><div><h1>Machines</h1><p>${S.error ? esc(S.error) : 'Reading every machine…'}</p></div></div>
+      ${S.error ? `<div class="panel"><div class="empty">${ic('i-alert', '')}<b>Could not read the fleet</b><p>${esc(S.error)}</p><button class="btn sm" data-act="retry">Try again</button></div></div>` : '<div class="fl-hosts">' + '<div class="panel skeleton fl-sk"></div>'.repeat(3) + '</div>'}</div>`;
+    return;
+  }
+  const hosts = d.hosts || [];
+  const dual = hosts.find((h) => (h.remote?.devices || []).length > 1);
+  const sub = `${hosts.length} host${hosts.length === 1 ? '' : 's'} · ${d.online} up${dual ? ` · ${esc(dual.name)} boots Linux or Windows` : ''}`;
+  const services = hosts.filter((h) => !h.away).flatMap((h) => h.services || []);
+  const stopped = services.filter((s) => s.ok === false).length;
+  const scrollY = root.closest('.main')?.scrollTop;
+
+  const settled = S.rendered;
+  S.rendered = true;
+  root.innerHTML = `<div class="page fl${settled ? ' fl-settled' : ''}">
+    <div class="ph"><div><h1>Machines</h1><p>${sub}</p></div>
+      <div class="acts"><div class="seg sm" data-seg="fl-win" aria-label="Chart window"><span class="ind"></span>
+        <button data-act="win" data-v="2h" aria-pressed="${S.win === '2h'}">2 h</button>
+        <button data-act="win" data-v="24h" aria-pressed="${S.win === '24h'}">24 h</button></div>
+        <span class="upd m"><span class="dot ${S.live ? 'ok live' : 'warn'}"></span> ${S.live ? 'Live' : 'Reconnecting'} · ${clock(d.at)}</span></div></div>
+    ${alertsBlock(d)}
+    <section class="sec" id="fl-hosts"><div class="fl-hosts">${hosts.map(hostCard).join('')}</div></section>
+    <section class="sec" id="fl-services"><div class="sh"><h2>Services</h2><span class="note">${stopped ? `${stopped} stopped · ` : ''}${services.length - stopped} of ${services.length} running</span></div>
+      <div class="fl-svc-groups">${hosts.map(svcGroup).join('')}</div></section>
+  </div>`;
+  ui.placeSegs?.(root);
+  if (S.focus) {
+    const target = S.focus === 'services' ? root.querySelector('#fl-services') : S.focus === 'alerts' ? root.querySelector('.fl-alerts') : null;
+    S.focus = null;
+    target?.scrollIntoView({ block: 'start' });
+  } else if (fin(scrollY) && root.closest('.main')) {
+    root.closest('.main').scrollTop = scrollY;
+  }
+}
+
+/* ── actions ──────────────────────────────────────────────────────────── */
+
+function remoteCtx() {
+  const api = async (p, o = {}) => {
+    const res = await fetch(`${remoteBase}/api${p.startsWith('/') ? p : `/${p}`}`, { headers: { 'content-type': 'application/json', ...(o.headers || {}) }, ...o });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const j = await res.json(); detail = j.detail || j.error || detail; } catch { /* not json */ }
+      throw new Error(detail);
     }
-    run = [];
+    return res.status === 204 ? null : res.json();
   };
-  for (const [x, y] of pts) {
-    if (Number.isFinite(y)) run.push([x, y]); else flush();
-  }
-  flush();
-  if (!svg.childNodes.length) return el('div', { class: 'fl-spark fl-spark--empty' });
-
-  // A graph you cannot interrogate is a shape, not a reading. The pointer
-  // picks the nearest sample and says what it was and when — no library,
-  // because it is one index lookup.
-  const wrap = el('div', { class: 'fl-sparkwrap' });
-  const cursor = el('span', { class: 'fl-spark-cursor' });
-  const tip = el('span', { class: 'fl-spark-tip' });
-  wrap.append(svg, cursor, tip);
-
-  const show = (ev) => {
-    const box = wrap.getBoundingClientRect();
-    if (!box.width || samples.length < 2) return;
-    const ratio = Math.max(0, Math.min(1, (ev.clientX - box.left) / box.width));
-    const i = Math.round(ratio * (samples.length - 1));
-    const sample = samples[i];
-    const v = sample?.[key];
-    cursor.style.left = `${(i / (samples.length - 1)) * 100}%`;
-    const when = Number.isFinite(sample?.t)
-      ? new Date(sample.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      : '';
-    tip.textContent = `${Number.isFinite(v) ? `${Math.round(v)}${unit}` : 'no sample'}${when ? ` · ${when}` : ''}`;
-    // Keep the label inside the box at both ends rather than letting it hang
-    // off the panel.
-    tip.style.left = `${Math.max(0, Math.min(100, (i / (samples.length - 1)) * 100))}%`;
-    tip.dataset.side = ratio > 0.66 ? 'left' : ratio < 0.33 ? 'right' : 'centre';
-    wrap.classList.add('is-hot');
+  const streams = [];
+  const sse = (p, h = {}) => {
+    const es = new EventSource(`${remoteBase}/api${p}`);
+    for (const [n, fn] of Object.entries(h.events || {})) es.addEventListener(n, (e) => { try { fn(JSON.parse(e.data), e); } catch { fn(e.data, e); } });
+    streams.push(es);
+    return { stop: () => es.close() };
   };
-  wrap.addEventListener('pointermove', show);
-  wrap.addEventListener('pointerdown', show);
-  wrap.addEventListener('pointerleave', () => wrap.classList.remove('is-hot'));
-  return wrap;
-};
-
-const alertRow = (a, onOpen) => el('button', {
-  class: `fl-row fl-alert is-${a.severity}`,
-  type: 'button',
-  onclick: () => onOpen?.(a),
-},
-el('span', { class: `fl-dot is-${a.severity}` }),
-el('span', { class: 'fl-alert-text' },
-  a.hostName && !a.text.includes(a.hostName) ? `${a.hostName}: ${a.text}` : a.text),
-a.hint ? el('span', { class: 'fl-alert-hint meta' }, a.hint) : null);
-
-/* ── views ───────────────────────────────────────────────────────────── */
-
-/** A mount point as a short name for a card: "/media/ojee/NVME" is "NVME". */
-const shortMount = (m) => {
-  const x = /^\/(?:media|run\/media)\/[^/]+\/(.+)$/.exec(m || '') || /^\/mnt\/(.+)$/.exec(m || '');
-  return x ? x[1] : m;
-};
-
-/** The filesystems a card shows: every one this machine has on its own disks,
-    fullest first. Not the boot partitions (a few hundred MB that only the
-    installer cares about) and not a share mounted from another machine, which
-    is that machine's disk and is shown on its own card. */
-const cardDisks = (h) => (h.disks || [])
-  .filter((d) => Number.isFinite(d.pct) && !d.remote && !/^\/boot(\/|$)/.test(d.mount || d.label || ''))
-  .sort((a, b) => b.pct - a.pct);
-
-function hostCard(h) {
-  const memPct = h.mem?.pct ?? null;
-  const disks = cardDisks(h);
-  const spare = disks.length ? (h.drives || []).filter((dv) => dv.mounted === false) : [];
-
-  // The whole card opens the host. Only the name was clickable, which means
-  // the obvious gesture — click the machine you are looking at — did nothing
-  // across nine tenths of the target.
-  const open = () => { state.selected = h.id; go('hosts'); };
-  return el('article', {
-    class: `panel fl-card is-clickable ${h.online ? '' : h.pending ? 'is-blip' : h.away ? 'is-away' : 'is-off'}`,
-    role: 'button',
-    tabindex: '0',
-    'aria-label': `Open ${h.name}`,
-    onclick: open,
-    onkeydown: (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
-    },
-  },
-  el('header', { class: 'fl-card-head' },
-    // A blip gets its own mark: neither the green that says all is well nor
-    // the red that says come and look.
-    h.pending ? el('span', { class: 'dot fl-dot-pending', title: 'not answering' })
-      : dot(h.status || (h.online ? 'ok' : 'err')),
-    el('span', { class: 'fl-card-name' }, h.name),
-    el('span', { class: 'fl-card-role meta' }, h.role || h.kind)),
-
-  h.online
-      ? el('div', { class: 'fl-card-body' },
-        bar(h.cpu?.pct, 'CPU', { text: `${fmtPct(h.cpu?.pct)}${Number.isFinite(h.cpu?.tempC) ? ` · ${fmtTemp(h.cpu.tempC)}` : ''}` }),
-        h.mem ? bar(memPct, 'Memory', { text: `${fmtPct(memPct)} · ${fmtBytes(h.mem.used)}` })
-          : el('div', { class: 'fl-metric fl-metric--absent' },
-            el('span', { class: 'label' }, 'Memory'),
-            el('span', { class: 'meta' }, 'not reported')),
-        ...disks.map((d) => bar(d.pct, `Disk ${shortMount(d.mount || d.label)}`,
-          { text: `${fmtPct(d.pct)} · ${fmtBytes(Number.isFinite(d.free) ? d.free : d.total - d.used)} free` })),
-        spare.length ? el('span', { class: 'meta fl-card-spare' },
-          `Not mounted: ${spare.map((dv) => `${dv.model || dv.device}${Number.isFinite(dv.size) ? ` (${fmtBytes(dv.size)})` : ''}`).join(', ')}`) : null,
-        h.gpu ? bar(h.gpu.pct, 'GPU', { text: `${fmtPct(h.gpu.pct)}${Number.isFinite(h.gpu.tempC) ? ` · ${fmtTemp(h.gpu.tempC)}` : ''}` }) : null)
-      : h.away
-        // Away says where it is, not what went wrong: the connection error
-        // ("connect ETIMEDOUT") is true and beside the point for a laptop that
-        // is switched off in a bag.
-        ? el('div', { class: 'fl-card-off is-away' },
-          el('strong', {}, 'Away'),
-          el('span', { class: 'meta' }, 'not watched while it is away'))
-        : el('div', { class: `fl-card-off ${h.pending ? 'is-pending' : ''}` },
-          // A blip says so plainly and does not shout. It is still on screen —
-          // not alerting is not the same as not telling.
-          el('strong', {}, h.pending ? 'Not answering' : 'Unreachable'),
-          el('span', { class: 'meta' }, h.error || ''),
-          el('span', { class: 'meta' },
-            h.pending
-              ? `retrying · ${ago(h.downSince)} so far, alerts after ${Math.round((h.graceMs || 0) / 60000)} min`
-              : `last seen ${ago(h.lastSeen)}`)),
-
-    el('footer', { class: 'fl-card-foot' },
-      el('span', { class: 'meta' },
-        h.online && Number.isFinite(h.uptime) ? `up ${fmtUptime(h.uptime)}`
-          : h.online ? `sampled ${ago(h.at)}` : `last seen ${ago(h.lastSeen)}`),
-      (h.alerts || []).length
-        ? el('span', { class: `badge ${h.status === 'err' ? 'badge--err' : 'badge--warn'}` },
-          `${h.alerts.length} alert${h.alerts.length > 1 ? 's' : ''}`)
-        : el('span', { class: 'meta' }, 'nothing to report')));
+  return { ctx: { ...ctx, base: remoteBase, api, sse, moduleId: 'remote' }, close: () => streams.forEach((s) => s.close()) };
 }
 
-/* An away machine is left out of both halves of "N of M": it is not
-   reachable, and it is not missing either. */
-function verdictText(d) {
-  const away = d.hosts.filter((h) => h.away);
-  const missing = d.hosts.filter((h) => !h.online && !h.away);
-  const note = away.length ? ` · ${away.map((h) => h.name).join(', ')} away` : '';
-  const here = d.total - away.length;
-  if (missing.length) return `${missing.length} of ${here} unreachable${note}`;
-  return `${here === d.total ? 'All ' : ''}${here} machine${here === 1 ? '' : 's'} reachable${note}`;
+function css(id, href) {
+  if (document.getElementById(id)) return;
+  const l = document.createElement('link');
+  l.id = id; l.rel = 'stylesheet'; l.href = href;
+  document.head.appendChild(l);
 }
 
-function viewOverview(d) {
-  const wrap = el('section', { class: 'stack-lg' });
-
-  wrap.append(el('div', { class: 'fl-verdict' },
-    dot(d.status),
-    el('strong', {}, verdictText(d)),
-    el('span', { class: 'meta' },
-      d.alerts.length ? `${d.alerts.length} thing${d.alerts.length > 1 ? 's' : ''} to look at` : 'nothing to look at'),
-    el('span', { class: 'fl-live meta' }, state.live ? 'live' : 'polling')));
-
-  wrap.append(el('div', { class: 'fl-grid' }, d.hosts.map(hostCard)));
-
-  if (d.alerts.length) {
-    wrap.append(el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'What is wrong'),
-      el('div', { class: 'fl-list' },
-        d.alerts.map((a) => alertRow(a, () => { state.selected = a.host; go('hosts'); })))));
-  }
-  return wrap;
-}
-
-function viewHosts(d) {
-  const current = d.hosts.find((h) => h.id === state.selected) || d.hosts[0];
-  if (!current) return el('div', { class: 'empty' }, 'No hosts configured.');
-  if (state.selected !== current.id) state.selected = current.id;
-
-  const detail = state.detail?.id === current.id ? state.detail : null;
-  const samples = detail?.history || [];
-
-  const picker = el('div', { class: 'fl-picker' },
-    d.hosts.map((h) => el('button', {
-      class: `fl-pick ${h.id === current.id ? 'is-on' : ''}`,
-      type: 'button',
-      onclick: () => {
-        state.selected = h.id; state.detail = null; state.logUnit = null;
-        state.procs = null; state.procsFor = null; state.procQuery = '';
-        loadDetail(); render();
-      },
-    },
-    h.pending ? el('span', { class: 'dot fl-dot-pending' }) : dot(h.status || (h.online ? 'ok' : 'err')),
-    h.name)));
-
-  const facts = el('dl', { class: 'fl-facts' },
-    [['Role', current.role || '—'],
-      ['OS', current.os || '—'],
-      ['Uptime', fmtUptime(current.uptime)],
-      ['CPU', current.cpu?.model || '—'],
-      ['Sampled', ago(current.at)],
-      ['Source', current.kind]]
-      .map(([k, v]) => el('div', {}, el('dt', {}, k), el('dd', { title: String(v) }, v))));
-
-  const charts = el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'Last 15 minutes'),
-    el('div', { class: 'fl-charts' },
-      [['cpu', 'CPU', current.cpu?.pct], ['mem', 'Memory', current.mem?.pct],
-        ['gpu', 'GPU', current.gpu?.pct], ['temp', 'CPU temp', current.cpu?.tempC]]
-        .map(([key, label, now]) => el('div', { class: 'fl-chart' },
-          el('div', { class: 'fl-metric-top' },
-            el('span', { class: 'label' }, label),
-            el('span', { class: 'fl-metric-val tnum' },
-              key === 'temp' ? fmtTemp(now) : fmtPct(now))),
-          spark(samples, key, { max: 100, unit: key === 'temp' ? '°C' : '%' })))));
-
-  // Storage: every mounted filesystem with its usage, then any physical disk
-  // that has nothing mounted from it — a spare SSD, an enclosure plugged in
-  // but not mounted. A host that reports drives and no usage at all lists
-  // the drives as hardware rather than drawing bars that could only read 0.
-  const fsList = current.disks || [];
-  const driveRow = (dv) => el('div', { class: 'fl-row fl-drive' },
-    el('span', { class: 'fl-drive-dev' }, dv.device),
-    el('span', { class: 'fl-drive-model meta', title: dv.model || '' },
-      [dv.model || 'unknown', dv.kind].filter(Boolean).join(' · ')),
-    el('span', { class: 'fl-drive-size tnum' }, fmtBytes(dv.size)),
-    fsList.length && dv.mounted === false
-      ? el('span', { class: 'label' }, 'not mounted')
-      : Number.isFinite(dv.tempC) ? el('span', { class: 'meta tnum' }, fmtTemp(dv.tempC)) : el('span'));
-  const spare = fsList.length ? (current.drives || []).filter((dv) => dv.mounted === false) : (current.drives || []);
-  const disks = el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, fsList.length ? 'Filesystems' : 'Drives'),
-    fsList.length
-      ? el('div', { class: 'stack' }, fsList.map((dk) => el('div', { class: 'fl-fs' },
-        bar(dk.pct, dk.label, {
-          text: `${fmtBytes(dk.used)} of ${fmtBytes(dk.total)}`
-            + `${Number.isFinite(dk.free) ? ` · ${fmtBytes(dk.free)} free` : ''}`,
-        }),
-        el('p', { class: 'meta fl-fs-meta' },
-          [dk.device, dk.fstype, dk.model, dk.remote ? 'network' : null].filter(Boolean).join(' · ')))))
-      : null,
-    spare.length
-      ? el('div', { class: 'fl-list' }, spare.map(driveRow))
-      : fsList.length ? null : el('p', { class: 'meta' }, 'This host does not report storage.'));
-
-  const gpu = current.gpu ? el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'GPU'),
-    el('p', { class: 'meta' }, current.gpu.model || 'unknown'),
-    bar(current.gpu.pct, 'Utilisation'),
-    Number.isFinite(current.gpu.vramTotal)
-      ? bar((current.gpu.vramUsed / current.gpu.vramTotal) * 100, 'VRAM',
-        { text: `${fmtBytes(current.gpu.vramUsed)} of ${fmtBytes(current.gpu.vramTotal)}` })
-      : null,
-    el('dl', { class: 'fl-facts' },
-      [['Temp', fmtTemp(current.gpu.tempC)],
-        ['Power', Number.isFinite(current.gpu.watts) ? `${Math.round(current.gpu.watts)} W` : '—'],
-        ['Clock', Number.isFinite(current.gpu.clockMhz) ? `${current.gpu.clockMhz} MHz` : '—']]
-        .map(([k, v]) => el('div', {}, el('dt', {}, k), el('dd', {}, v))))) : null;
-
-  // Hardware we know about but cannot measure. Same principle as drives: say
-  // what is there rather than drawing a gauge that can only read zero.
-  const gpuList = (!current.gpu && (current.gpus || []).length)
-    ? el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'Graphics'),
-      el('div', { class: 'fl-list' }, current.gpus.map((g) => el('div', { class: 'fl-row fl-drive' },
-        el('span', { class: 'fl-drive-dev' }, g.inUse ? 'in use' : 'idle'),
-        el('span', { class: 'fl-drive-model meta', title: g.model }, g.model),
-        el('span', { class: 'meta' }, g.driver || ''),
-        Number.isFinite(g.clockMhz) ? el('span', { class: 'meta tnum' }, `${g.clockMhz} MHz`) : null))))
-    : null;
-
-  const extras = [];
-  if (current.battery) {
-    extras.push(el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'Battery'),
-      bar(current.battery.pct, current.battery.state || 'charge',
-        { warn: 100, crit: 100, text: fmtPct(current.battery.pct) }),
-      Number.isFinite(current.battery.health)
-        ? el('p', { class: 'meta' }, `health ${fmtPct(current.battery.health)}`) : null));
-  }
-  if (current.net) {
-    extras.push(el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'Network'),
-      el('dl', { class: 'fl-facts' },
-        [['Down', fmtRate(current.net.rx)], ['Up', fmtRate(current.net.tx)]]
-          .map(([k, v]) => el('div', {}, el('dt', {}, k), el('dd', { class: 'tnum' }, v))))));
-  }
-
-  const logs = current.capabilities?.logs ? viewLogs(current) : null;
-  const procs = current.capabilities?.processes ? viewProcesses(current) : null;
-
-  return el('section', { class: 'stack-lg' },
-    picker,
-    current.away
-      ? el('div', { class: 'alert alert--info' },
-        `${current.name} is away — last seen ${ago(current.lastSeen)}. `
-          + 'It is a machine that leaves, so while it is gone nothing here is an alert '
-          + 'and nothing is sent. The numbers below are the last ones it reported.')
-    : !current.online
-      ? el('div', { class: `alert ${current.pending ? 'alert--warn' : 'alert--err'}` },
-        current.pending
-          ? `${current.name} has not answered since ${ago(current.downSince)} — ${current.error || 'no reason given'}. `
-            + `Brief drops are not reported; this becomes an alert after ${Math.round((current.graceMs || 0) / 60000)} minutes.`
-          : `${current.name} is unreachable — ${current.error || 'no reason given'}. `
-            + `Last seen ${ago(current.lastSeen)}.`)
-      : null,
-    el('section', { class: 'panel stack' }, el('h3', { class: 'h3' }, current.name), facts),
-    charts,
-    el('div', { class: 'fl-two' }, disks, gpu || gpuList || extras.shift() || el('div')),
-    extras.length ? el('div', { class: 'fl-two' }, extras) : null,
-    servicesPanel([current]),
-    procs,
-    logs);
-}
-
-function viewLogs(host) {
-  const units = (host.services || []).map((s) => s.id).slice(0, 12);
-  return el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'Logs'),
-    el('div', { class: 'fl-chips' },
-      units.map((u) => el('button', {
-        class: `btn btn--ghost btn--sm ${state.logUnit === u ? 'fl-on' : ''}`,
-        type: 'button',
-        onclick: () => loadLog(host.id, u),
-      }, u))),
-    state.logBusy
-      ? el('div', { class: 'fl-log fl-log--loading' },
-        el('span', { class: 'meta' }, `Reading ${state.logUnit}…`),
-        [92, 74, 86, 61, 80].map((w) => el('span', { class: 'skeleton fl-log-skel', style: `width:${w}%` })))
-      : el('pre', { class: 'fl-log' },
-        state.logText || 'Pick a unit to read its journal.'));
-}
-
-function viewProcesses(host) {
-  if (state.procsFor !== host.id && state.procs === null) loadProcs(host.id);
-  const rows = state.procsFor === host.id ? (state.procs || []) : [];
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'fl-panel-head' },
-      el('h3', { class: 'h3' }, 'Processes'),
-      el('input', {
-        class: 'input fl-proc-search',
-        type: 'search',
-        placeholder: 'Filter',
-        value: state.procQuery,
-        oninput: (e) => {
-          state.procQuery = e.target.value;
-          clearTimeout(viewProcesses.t);
-          // Typing should not fire a request per keystroke at a machine that
-          // has to walk /proc to answer it.
-          viewProcesses.t = setTimeout(() => loadProcs(host.id), 250);
-        },
-      })),
-    rows.length
-      ? el('div', { class: 'fl-list fl-procs' },
-        el('div', { class: 'fl-row fl-proc fl-proc--head' },
-          el('span', {}, 'Process'), el('span', {}, 'User'),
-          el('span', { class: 'tnum' }, 'CPU'), el('span', { class: 'tnum' }, 'Memory')),
-        rows.map((pr) => el('div', { class: 'fl-row fl-proc' },
-          el('span', { class: 'fl-proc-name', title: pr.cmdline || pr.name }, pr.name),
-          el('span', { class: 'meta' }, pr.user || '—'),
-          el('span', { class: 'tnum' }, `${(pr.cpuPct ?? 0).toFixed(1)}%`),
-          el('span', { class: 'tnum' }, fmtBytes((pr.memKb || 0) * 1024)))))
-      : el('p', { class: 'meta' }, state.procsFor === host.id ? 'Nothing matches that.' : 'Reading…'));
-}
-
-function servicesPanel(hosts) {
-  const q = state.filter.trim().toLowerCase();
-  const rows = hosts.flatMap((h) => (h.services || [])
-    .filter((s) => !q || s.name.toLowerCase().includes(q) || h.name.toLowerCase().includes(q))
-    .map((s) => ({ ...s, host: h })));
-
-  if (!rows.length) {
-    return el('section', { class: 'panel stack' },
-      el('h3', { class: 'h3' }, 'Services'),
-      el('p', { class: 'meta' }, q ? 'Nothing matches that.' : 'No services reported.'));
-  }
-
-  return el('section', { class: 'panel stack' },
-    el('div', { class: 'fl-panel-head' },
-      el('h3', { class: 'h3' }, 'Services'),
-      el('span', { class: 'meta' },
-        `${rows.filter((r) => r.ok).length} of ${rows.length} running`)),
-    el('div', { class: 'fl-list' }, rows.map((s) => el('div', {
-      class: `fl-row fl-svc ${s.ok ? '' : 'is-bad'}`,
-    },
-    dot(s.ok ? 'ok' : 'err'),
-    el('span', { class: 'fl-svc-name' }, s.name),
-    el('span', { class: 'fl-svc-host meta' }, s.host.name),
-    el('span', { class: 'fl-svc-detail meta' },
-      s.detail || (s.ok ? 'running' : 'stopped')),
-    s.host.capabilities?.actions
-      ? el('button', {
-        class: 'btn btn--ghost btn--sm',
-        type: 'button',
-        disabled: state.busyAction === `${s.host.id}:${s.id}`,
-        onclick: () => runAction(s.host.id, `restart-${s.id}`, s.name),
-      }, state.busyAction === `${s.host.id}:${s.id}` ? '…' : 'Restart')
-      : null))));
-}
-
-function viewServices(d) {
-  return el('section', { class: 'stack-lg' },
-    el('div', { class: 'fl-toolbar' },
-      el('input', {
-        class: 'input',
-        type: 'search',
-        placeholder: 'Filter services',
-        value: state.filter,
-        oninput: (e) => { state.filter = e.target.value; render(); },
-      })),
-    servicesPanel(d.hosts));
-}
-
-/**
- * Problems seen but not yet held long enough to count (the poller's
- * hysteresis). Shown quietly: not alerting is not the same as not telling,
- * but a restart in progress must not look like an outage either.
- */
-function pendingPanel(d) {
-  const list = d.hosts.flatMap((h) => (h.pendingAlerts || []).map((a) => ({ ...a, hostName: h.name })));
-  if (!list.length) return null;
-  return el('section', { class: 'panel stack' },
-    el('h3', { class: 'h3' }, 'Waiting to confirm'),
-    el('p', { class: 'meta' }, 'Seen, but not for long enough to be an alert. Most of these are restarts.'),
-    el('div', { class: 'fl-list' }, list.map((a) => el('div', { class: 'fl-row fl-alert' },
-      el('span', { class: 'dot fl-dot-pending' }),
-      el('span', { class: 'fl-alert-text' },
-        a.hostName && !a.text.includes(a.hostName) ? `${a.hostName}: ${a.text}` : a.text),
-      el('span', { class: 'fl-alert-hint meta' }, `first seen ${ago(a.since)}`)))));
-}
-
-function viewAlerts(d) {
-  if (!d.alerts.length) {
-    return el('section', { class: 'stack-lg' },
-      el('div', { class: 'empty' },
-        el('p', {}, el('strong', {}, 'Nothing is wrong.')),
-        el('p', { class: 'meta' }, `${d.total} machines, all reporting normally.`)),
-      pendingPanel(d));
-  }
-  const byHost = new Map();
-  for (const a of d.alerts) {
-    if (!byHost.has(a.host)) byHost.set(a.host, []);
-    byHost.get(a.host).push(a);
-  }
-  return el('section', { class: 'stack-lg' },
-    [...byHost.entries()].map(([id, list]) => {
-      const h = d.hosts.find((x) => x.id === id);
-      return el('section', { class: 'panel stack' },
-        el('div', { class: 'fl-panel-head' },
-          el('h3', { class: 'h3' }, h?.name || id),
-          el('button', {
-            class: 'btn btn--ghost btn--sm',
-            type: 'button',
-            onclick: () => { state.selected = id; go('hosts'); },
-          }, 'Open')),
-        el('div', { class: 'fl-list' }, list.map((a) => alertRow(a))));
-    }),
-    pendingPanel(d));
-}
-
-/* ── actions ─────────────────────────────────────────────────────────── */
-
-async function runAction(hostId, action, label) {
-  state.busyAction = `${hostId}:${action.replace(/^restart-/, '')}`;
-  render();
+async function openWay(kind, deviceId) {
+  const h = S.data.hosts.find((x) => (x.remote?.devices || []).some((d) => d.id === deviceId));
+  const dev = h?.remote.devices.find((d) => d.id === deviceId);
+  const file = kind === 'screen' ? 'session' : kind;
   try {
-    const res = await api(`/api/hosts/${hostId}/action`, {
-      method: 'POST',
-      body: JSON.stringify({ action }),
-      headers: { 'content-type': 'application/json' },
+    const mod = await import(`${remoteBase}/ui/${file}.js`);
+    css(`rm-${file}-css`, `${remoteBase}/ui/${file}.css`);
+    const r = remoteCtx();
+    const start = kind === 'screen' ? mod.startSession : kind === 'shell' ? mod.startShell : mod.startFiles;
+    root.innerHTML = '';
+    const stop = start({
+      host: root, ctx: r.ctx, deviceId, deviceName: dev?.name || deviceId,
+      onExit: () => { closeWay(); },
     });
-    ctx.toast?.(res?.error ? 'err' : 'ok',
-      res?.error ? `Could not restart ${label}` : `Restarted ${label}`,
-      res?.error || undefined);
+    stopSession = () => { try { stop?.(); } finally { r.close(); } };
   } catch (e) {
-    ctx.toast?.('err', `Could not restart ${label}`, e.message);
-  } finally {
-    state.busyAction = null;
-    await refresh();
-  }
-}
-
-async function loadLog(hostId, unit) {
-  state.logUnit = unit; state.logBusy = true; state.logText = '';
-  render();
-  try {
-    const res = await api(`/api/hosts/${hostId}/logs/${encodeURIComponent(unit)}`);
-    state.logText = res?.lines || res?.error || '(nothing logged)';
-  } catch (e) {
-    state.logText = e.message;
-  } finally {
-    state.logBusy = false;
+    stopSession = null;
+    ctx.toast('err', `Could not open ${kind}`, e.message);
     render();
   }
 }
 
-async function loadProcs(hostId) {
-  try {
-    const d = await api(`/api/hosts/${hostId}/processes?limit=30`
-      + (state.procQuery ? `&q=${encodeURIComponent(state.procQuery)}` : ''));
-    state.procs = d?.processes || [];
-    state.procsFor = hostId;
-  } catch { state.procs = []; state.procsFor = hostId; }
+function closeWay() {
+  const s = stopSession;
+  stopSession = null;
+  try { s?.(); } catch { /* already gone */ }
   render();
 }
 
-async function loadDetail() {
-  if (!state.selected) return;
-  try {
-    state.detail = await api(`/api/hosts/${state.selected}`);
-  } catch { state.detail = null; }
+async function restart(hostId, svc) {
+  const key = `${hostId}:${svc}`;
+  if (S.restarting[key] !== 'armed') {
+    // Two taps, three seconds apart at most: quiet, but not one stray tap.
+    S.restarting[key] = 'armed';
+    render();
+    setTimeout(() => { if (S.restarting[key] === 'armed') { delete S.restarting[key]; render(); } }, 3000);
+    return;
+  }
+  S.restarting[key] = 'busy';
   render();
+  try {
+    await ctx.api(`/hosts/${encodeURIComponent(hostId)}/action`, { method: 'POST', body: JSON.stringify({ action: `restart-${svc}` }) });
+    ctx.toast('ok', `Restarted ${svc}`, '');
+  } catch (e) {
+    ctx.toast('err', `Could not restart ${svc}`, e.message);
+  } finally {
+    delete S.restarting[key];
+    render();
+  }
+}
+
+async function boot(hostId) {
+  const h = S.data.hosts.find((x) => x.id === hostId);
+  const w = ways(h);
+  const to = /windows/i.test(w.boot?.label || '') ? 'windows' : 'linux';
+  S.confirm = null;
+  try {
+    await ctx.api(`/hosts/${encodeURIComponent(hostId)}/boot`, { method: 'POST', body: JSON.stringify({ confirm: true, to }) });
+    S.rebooting[hostId] = { to: to === 'windows' ? 'Windows' : 'Linux', until: Date.now() + 90_000 };
+    setTimeout(() => { delete S.rebooting[hostId]; render(); }, 90_000);
+  } catch (e) {
+    ctx.toast('err', `Could not reboot ${h.name}`, e.message);
+  }
+  render();
+}
+
+async function loadLong() {
+  const ids = (S.data?.hosts || []).map((h) => h.id).filter((id) => !S.long[id] || Date.now() - S.long[id].at > 60_000);
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const r = await ctx.api(`/hosts/${encodeURIComponent(id)}/history?window=24h`);
+      S.long[id] = { at: Date.now(), points: r.points || [] };
+    } catch { /* that card keeps its 2 h line */ }
+  }));
+  render();
+}
+
+function onClick(e) {
+  const b = e.target.closest('[data-act]');
+  if (!b || !root.contains(b)) return;
+  const act = b.dataset.act;
+  const host = b.dataset.host;
+  if (b.getAttribute('aria-disabled') === 'true') {
+    ctx.toast('warn', b.title || 'Not available', '');
+    return;
+  }
+  if (act === 'retry') { refresh(); return; }
+  if (act === 'screen' || act === 'shell' || act === 'files') { openWay(act, b.dataset.dev); return; }
+  if (act === 'boot') { S.confirm = S.confirm === host ? null : host; render(); return; }
+  if (act === 'cancel') { S.confirm = null; render(); return; }
+  if (act === 'boot-go') { boot(host); return; }
+  if (act === 'restart') { restart(host, b.dataset.svc); return; }
+  if (act === 'win') {
+    S.win = b.dataset.v;
+    if (S.win === '24h') loadLong();
+    else render();
+  }
+}
+
+function onToggle(e) {
+  const d = e.target.closest?.('details.fl-svcs');
+  if (d) S.open[d.dataset.host] = d.open;
 }
 
 async function refresh() {
   try {
-    state.data = await api('/api/hosts');
-    state.error = null;
+    S.data = await ctx.api('/hosts');
+    S.error = null;
   } catch (e) {
-    state.error = e.message;
+    S.error = e.message;
   }
-  if (state.view === 'hosts') await loadDetail();
   render();
 }
 
-function go(view) {
-  state.view = view;
-  ctx.setView?.(view);
-  render();
-  if (view === 'hosts') loadDetail();
-}
-
-/* ── live ────────────────────────────────────────────────────────────── */
-
-function connect() {
+async function findRemote() {
+  if (!ctx.base) return null;            // standalone: no console, no gateway beside us
+  const base = ctx.base.replace(/[^/]+$/, 'remote');
   try {
-    stream = new EventSource(`${ctx.base}/api/events`);
-    stream.addEventListener('state', (e) => {
-      state.data = JSON.parse(e.data);
-      state.live = true;
-      state.error = null;
-      render();
-    });
-    stream.onerror = () => { state.live = false; render(); };
-  } catch {
-    state.live = false;
-  }
-  // The fallback runs regardless. An SSE stream that connects and then
-  // delivers nothing — a proxy buffering it, a sleeping laptop — looks
-  // identical to a healthy one from here, and polling every 15s costs a
-  // rounding error next to being silently wrong.
-  pollTimer = setInterval(() => { if (!document.hidden) refresh(); }, 15_000);
+    const r = await fetch(`${base}/module.json`, { signal: AbortSignal.timeout(4000) });
+    return r.ok ? base : null;
+  } catch { return null; }
 }
 
-/* ── render ──────────────────────────────────────────────────────────── */
-
-function render() {
-  if (!root) return;
-  const d = state.data;
-  root.replaceChildren();
-
-  if (state.error && !d) {
-    root.append(el('div', { class: 'alert alert--err' }, state.error));
-    return;
+async function loadUi() {
+  for (const u of ['/ojee-ui3.js', `${ctx.base}/ojee-ui3.js`]) {
+    try { return await import(u); } catch { /* next */ }
   }
-  if (!d) {
-    root.append(el('div', { class: 'stack-lg' },
-      el('span', { class: 'skeleton', style: 'height:64px;display:block' }),
-      el('span', { class: 'skeleton', style: 'height:180px;display:block' })));
-    return;
-  }
-
-  const body = state.view === 'hosts' ? viewHosts(d)
-    : state.view === 'services' ? viewServices(d)
-      : state.view === 'alerts' ? viewAlerts(d)
-        : viewOverview(d);
-  root.append(body);
+  throw new Error('ojee-ui3.js not found');
 }
-
-/* ── module contract ─────────────────────────────────────────────────── */
 
 export default {
-  async mount(mountEl, context) {
-    root = mountEl;
+  async mount(el, context) {
+    root = el;
     ctx = context;
-    state.view = context.view || 'overview';
-
-    if (!document.getElementById('fl-css')) {
-      const link = document.createElement('link');
-      link.id = 'fl-css';
-      link.rel = 'stylesheet';
-      link.href = `${ctx.base}/ui/fleet.css`;
-      document.head.appendChild(link);
-    }
-
+    css('fl-css', `${ctx.base}/ui/fleet.css`);
+    ui = await loadUi();
+    S.focus = ctx.view && ctx.view !== 'machines' ? ctx.view : null;
+    root.addEventListener('click', onClick);
+    root.addEventListener('toggle', onToggle, true);
     render();
-    await refresh();
-    connect();
+    [remoteBase] = await Promise.all([findRemote(), refresh()]);
+    render();
+    ctx.sse('/events', {
+      onOpen: () => { S.live = true; },
+      onError: () => { S.live = false; render(); },
+      events: { state: (s) => { S.data = s; S.live = true; S.error = null; render(); } },
+    });
+    // The reboot countdown is the only thing that moves between polls.
+    tickTimer = setInterval(() => {
+      root?.querySelectorAll('[data-count]').forEach((n) => { n.textContent = `${Math.max(0, Math.ceil((Number(n.dataset.count) - Date.now()) / 1000))} s`; });
+    }, 1000);
   },
 
   async setView(view) {
-    state.view = view || 'overview';
+    if (stopSession) closeWay();
+    S.focus = view && view !== 'machines' ? view : null;
     render();
-    if (state.view === 'hosts') loadDetail();
   },
 
   async unmount() {
-    if (stream) stream.close();
-    if (pollTimer) clearInterval(pollTimer);
-    stream = null; pollTimer = null; root = null; ctx = null;
-    state.data = null; state.detail = null;
+    if (stopSession) { try { stopSession(); } catch { /* gone */ } }
+    stopSession = null;
+    clearInterval(tickTimer);
+    root?.removeEventListener('click', onClick);
+    root?.removeEventListener('toggle', onToggle, true);
+    root = null;
+    ctx = null;
   },
 };
