@@ -398,20 +398,20 @@ function alertsBlock(d) {
 }
 
 /**
- * The line under the shell's "Machines" title. The shell only draws its <p>
- * when the summary headline is already loaded (a fresh load straight onto
- * this page has none yet, so setSub had nowhere to write), and its 20 s
- * summary refresh puts the headline back over any <p> not marked custom.
+ * The line under the shell's "Machines" title. The console keeps a line set
+ * with setSub until we clear it or the route changes. Consoles from before
+ * that only drew the <p> once the summary headline had loaded and put the
+ * headline back every 20 s over any <p> not marked custom, so for them the
+ * line is also written straight into the header.
  */
 function setHeaderSub(text) {
+  ctx.header.setSub?.(text);
   const ph = ctx.header.actions?.closest('.ph');
-  let p = ph?.querySelector(':scope > div:first-child > p');
-  if (!p && ph?.querySelector('h1')) {
-    p = document.createElement('p');
-    ph.querySelector('h1').after(p);
-  }
-  if (p) { p.textContent = text; p.dataset.custom = '1'; }
-  else ctx.header.setSub?.(text);
+  if (!text || !ph?.querySelector('h1')) return;
+  let p = ph.querySelector(':scope > div:first-child > p');
+  if (!p) { p = document.createElement('p'); ph.querySelector('h1').after(p); }
+  if (p.textContent !== text) p.textContent = text;
+  p.dataset.custom = '1';
 }
 
 /** The page padding is the shell's when it already wraps us in one. */
