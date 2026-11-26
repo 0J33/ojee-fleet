@@ -444,6 +444,8 @@ async function openWay(kind, deviceId) {
   const file = kind === 'screen' ? 'session' : kind;
   try {
     const mod = await import(`${remoteBase}/ui/${file}.js`);
+    // remote.css carries the shared controls (.rs-chip, .rs-icon) every session page uses.
+    css('rm-remote-css', `${remoteBase}/ui/remote.css`);
     css(`rm-${file}-css`, `${remoteBase}/ui/${file}.css`);
     const r = remoteCtx();
     const start = kind === 'screen' ? mod.startSession : kind === 'shell' ? mod.startShell : mod.startFiles;

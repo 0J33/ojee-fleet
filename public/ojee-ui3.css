@@ -358,6 +358,8 @@ a.row,button.row{width:100%;text-align:left;transition:background-color 120ms ea
 .srow .qa{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1}
 .srow .qa .chip .i{width:14px;height:14px}
 .srow .qa .chip[aria-pressed="true"] .i{color:var(--acc)}
+/* phones: chips on a two-column grid, so four of them are two even rows, never 3 + 1 */
+@container app (max-width:699px){.srow .qa{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.srow .qa .chip{min-width:0}.srow .qa .chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
 .srow .line{grid-area:m;color:var(--fg-2);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @container app (min-width:700px){
   .srows.nospark .srow{grid-template-columns:200px minmax(0,1fr) 0 16px}
