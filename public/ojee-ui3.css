@@ -673,7 +673,11 @@ html{touch-action:manipulation}
    scrolls. With a 100dvh frame inside a scrollable body, Safari's toolbar
    changing size left a few px of document scroll, and the bottom bar's
    safe-area spacing came out wrong until the bar itself was scrolled. */
-html:has(body>.shell),html:has(#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
-body:has(>.shell),body:has(>#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
+/* The document is as tall as the frame (--app-h): body is a size container,
+   so it is the containing block of fixed layers inside it (a module's full-
+   screen session view); at 100% it stopped 47px short on the iPhone home-screen
+   app and cut off whatever sat at the bottom of those layers. */
+html:has(body>.shell),html:has(#app.shell){height:var(--app-h,100%);overflow:hidden;overscroll-behavior:none}
+body:has(>.shell),body:has(>#app.shell){height:var(--app-h,100%);overflow:hidden;overscroll-behavior:none}
 .shell{position:fixed;top:0;left:0;right:0;bottom:auto;height:var(--app-h,100vh)}
 @supports (height:100dvh){.shell{height:var(--app-h,100dvh)}}
