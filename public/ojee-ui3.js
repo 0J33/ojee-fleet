@@ -92,7 +92,14 @@ export function spark(points, { status = null, threshold = null, min = null, max
  * is what iOS actually gives the page. Kept current on every kind of resize.
  */
 function syncAppHeight() {
-  const h = Math.round(window.innerHeight);
+  // iPhone home-screen app (iOS 18/26, viewport-fit=cover): the page is drawn
+  // from the very top of the screen, under the status bar, but innerHeight
+  // leaves the status bar out (measured: screen 926, innerHeight 879, safe-area
+  // top 47). outerHeight is the real drawn height there. Elsewhere innerHeight.
+  const standalone = navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+  const ios = /iP(hone|ad|od)/.test(navigator.userAgent);
+  let h = Math.round(window.innerHeight);
+  if (standalone && ios && window.outerHeight > h && window.outerHeight <= screen.height + 1) h = Math.round(window.outerHeight);
   if (h > 0) document.documentElement.style.setProperty('--app-h', `${h}px`);
 }
 if (typeof window !== 'undefined' && !window.__ojeeAppH) {
