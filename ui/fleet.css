@@ -117,3 +117,7 @@
   .fl .fl-rs{height:36px}
   .fl .fl-svcs summary{min-height:48px}
 }
+
+/* in the shell's header */
+.fl-hacts{display:flex;align-items:center;gap:8px}
+.fl-hacts .fl-live{display:inline-flex;align-items:center;gap:6px}

@@ -48,6 +48,26 @@ export const ALERT_KINDS_MANIFEST = [
 ].map((k) => ({ ...k, threshold: k.thresholds?.[0] || null }));
 
 /**
+ * The same kinds in the console's documented `notifications` shape
+ * (ojee-console README, Notifications): id, severity info|warn|critical,
+ * channel, hold / clearMin, params, source 'alerts'.
+ */
+export const NOTIFICATION_KINDS = ALERT_KINDS_MANIFEST.map((k) => ({
+  id: k.kind,
+  label: k.label,
+  description: k.description,
+  severity: k.severity === 'err' ? 'critical' : k.severity,
+  blocking: !!k.blocking,
+  channel: k.channel,
+  discord: false,
+  hold: 2,
+  clearMin: 5,
+  params: (k.thresholds || []).map((t) => ({ key: t.key, label: t.label, type: 'number', unit: t.unit, default: t.default })),
+  view: 'machines',
+  source: 'alerts',
+}));
+
+/**
  * The console's per-kind settings -> LIMITS overrides. Accepts
  * `types[kind].thresholds[key]`, `types[kind].params[key]`, or a bare number
  * `types[kind].threshold` for a kind's first threshold.
@@ -154,6 +174,10 @@ function uptimeText(s) {
   return d ? `${d}d ${hh}h` : `${hh}h ${Math.floor((s % 3600) / 60)}m`;
 }
 
+/** Both names: the console's (`status`, `points`, `cap`) and the first draft's. */
+const metric = (m) => (m ? { ...m, status: m.state ?? null } : m);
+const sparkOut = (sp, unit) => (sp ? { ...sp, points: sp.values, cap: sp.stat, status: sp.state ?? null, unit } : null);
+
 function hostRow(h) {
   const temp = rnd(h.cpu?.tempC);
   const fullest = (h.disks || []).filter((x) => Number.isFinite(x.pct)).sort((a, b) => b.pct - a.pct)[0];
@@ -163,9 +187,10 @@ function hostRow(h) {
       : { label: 'Uptime', value: uptimeText(h.uptime), unit: '' };
   const hot = Number.isFinite(h.cpu?.tempC);
   const vals = hot ? h.series.temp : h.series.cpu;
-  return {
+  const row = {
     id: h.id,
     name: h.name,
+    icon: h.tag === 'Laptop' ? 'i-laptop' : h.tag === 'VPS' ? 'i-cloud' : 'i-server',
     tag: h.remote?.os === 'windows' && h.away ? 'Windows' : (h.tag || null),
     status: hostState(h),
     statusText: h.stateText,
@@ -188,6 +213,7 @@ function hostRow(h) {
       max: hot ? null : 100,
     },
   };
+  return { ...row, metrics: row.metrics.map(metric), spark: sparkOut(row.spark, hot ? '°' : '%') };
 }
 
 export function buildSummary(s) {
@@ -236,8 +262,12 @@ export function buildSummary(s) {
   const alerts = s.alerts
     .filter((a) => !(a.kind === 'cpu-temp' && crit.has(a.host)))
     .map((a) => ({
-      key: alertKey(a, a.host),
+      // The console keys an item module:kind:key, so `key` is the subject:
+      // the host, and the service or mount when there is one.
+      key: alertKey(a, a.host).replace(`fleet.${a.kind}.`, ''),
       kind: `fleet.${a.kind}`,
+      notify: `fleet.${a.kind}`,
+      action: 'Open',
       text: a.hint && a.heldMin ? `${a.text} for ${a.heldMin} min` : a.text,
       detail: a.hint || null,
       severity: a.severity,
@@ -250,7 +280,7 @@ export function buildSummary(s) {
     status: s.status === 'unknown' ? 'warn' : s.status,
     headline,
     facts,
-    metrics,
+    metrics: metrics.map(metric),
     spark: hotRow?.spark || null,
     rows,
     alerts,

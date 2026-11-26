@@ -88,7 +88,9 @@ test('summary: rows per host, four metrics each, no 3D model, one critical heat 
   for (const r of out.rows) assert.equal(r.metrics.length, 4);
   assert.equal(out.metrics.length, 4);
   assert.equal(out.rows[0].metrics[1].state, 'err');
-  assert.deepEqual(out.alerts.map((a) => a.key), ['fleet.cpu-temp-critical.loq', 'fleet.service-down.hp.caddy']);
+  assert.deepEqual(out.alerts.map((a) => [a.notify, a.key]), [['fleet.cpu-temp-critical', 'loq'], ['fleet.service-down', 'hp.caddy']]);
+  assert.equal(out.rows[0].metrics[1].status, 'err');
+  assert.ok(Array.isArray(out.rows[0].spark.points));
   assert.equal(out.alerts[0].blocking, true);
   for (const a of out.alerts) assert.doesNotMatch(a.key, /\d/);
 });

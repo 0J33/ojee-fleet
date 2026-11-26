@@ -27,7 +27,9 @@ import { ADAPTERS, Poller } from './poller.js';
 import { Notifier } from './notify.js';
 import { HistoryStore } from './history.js';
 import { RemoteLink } from './remote.js';
-import { buildSummary, decorate, ALERT_KINDS_MANIFEST, applyPrefs } from './summary.js';
+import {
+  buildSummary, decorate, ALERT_KINDS_MANIFEST, NOTIFICATION_KINDS, applyPrefs,
+} from './summary.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -69,11 +71,14 @@ const notifier = new Notifier(config.notify);
    own Discord webhook, so an incident is never lost because the console is
    down; the console's settings (pushed to /api/notify/prefs) still apply. */
 
+// The old per-incident message. The redesigned console raises one inbox item
+// per summary alert kind (NOTIFICATION_KINDS) instead, so this is off by
+// default there — on, it would say the same thing twice.
 const NOTIFY_TYPES = [{
-  id: 'fleet.host', label: 'A machine degraded, in trouble, or recovered',
-  description: 'One message per incident, when a machine changes state and stays changed; a recovery only for a break that was announced.',
-  severity: 'warn', defaultChannels: ['app', 'discord'], view: 'hosts', cooldownMin: 0,
-}];
+  id: 'fleet.host', label: 'A machine changed state (legacy)',
+  description: 'One message per incident; superseded by the per-kind alerts below.',
+  severity: 'warn', defaultChannels: ['app', 'discord'], channel: 'off', view: 'machines', cooldownMin: 0,
+}, ...NOTIFICATION_KINDS];
 const recentNotify = [];
 const routers = new Set();
 let routerGoneAt = Date.now();
@@ -125,6 +130,7 @@ app.get('/module.json', (req, res) => {
     // on an overview render the same square as every other one.
     icon: 'i-server',
     views: VIEWS,
+    viewTabs: false,
     ui: '/ui/index.js',
     health: '/api/health',
     capabilities: ['summary', 'sse', 'notify'],

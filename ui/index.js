@@ -341,7 +341,7 @@ function alertsBlock(d) {
 }
 
 /** The page padding is the shell's when it already wraps us in one. */
-const pageCls = () => (root.parentElement?.closest('.page') ? 'fl-in' : 'page');
+const pageCls = () => (ctx.ui3 || root.parentElement?.closest('.page') ? 'fl-in' : 'page');
 
 function render() {
   if (!root || stopSession) return;
@@ -362,12 +362,27 @@ function render() {
   const caret = typing ? document.activeElement.selectionStart : null;
   const settled = S.rendered;
   S.rendered = true;
-  root.innerHTML = `<div class="${pageCls()} fl${settled ? ' fl-settled' : ''}">
-    <div class="ph"><div><h1>Machines</h1><p>${sub}</p></div>
-      <div class="acts"><div class="seg sm" data-seg="fl-win" aria-label="Chart window"><span class="ind"></span>
+  const hdrActs = `<div class="seg sm" data-seg="fl-win" aria-label="Chart window"><span class="ind"></span>
         <button data-act="win" data-v="2h" aria-pressed="${S.win === '2h'}">2 h</button>
         <button data-act="win" data-v="24h" aria-pressed="${S.win === '24h'}">24 h</button></div>
-        <span class="upd m"><span class="dot ${S.live ? 'ok live' : 'warn'}"></span> ${S.live ? 'Live' : 'Reconnecting'} · ${clock(d.at)}</span></div></div>
+        <span class="upd m fl-live"><span class="dot ${S.live ? 'ok live' : 'warn'}"></span> ${S.live ? 'Live' : 'Reconnecting'} · ${clock(d.at)}</span>`;
+  // Inside the redesigned console the shell draws the page header; the
+  // module fills its subtitle and its right side. Elsewhere it draws its own.
+  const shellHead = ctx.header && ctx.header.actions;
+  if (shellHead) {
+    ctx.header.setSub?.(sub);
+    let box = ctx.header.actions.querySelector('.fl-hacts');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'fl-hacts fl';
+      box.addEventListener('click', onClick);
+      ctx.header.actions.prepend(box);
+    }
+    box.innerHTML = hdrActs;
+    ui.placeSegs?.(box);
+  }
+  root.innerHTML = `<div class="${pageCls()} fl${settled ? ' fl-settled' : ''}">
+    ${shellHead ? '' : `<div class="ph"><div><h1>Machines</h1><p>${sub}</p></div><div class="acts">${hdrActs}</div></div>`}
     ${alertsBlock(d)}
     <section class="sec" id="fl-hosts"><div class="fl-hosts">${hosts.map(hostCard).join('')}</div></section>
     <section class="sec" id="fl-services"><div class="sh"><h2>Services</h2><span class="note">${stopped ? `${stopped} stopped · ` : ''}${services.length - stopped} of ${services.length} running</span></div>
@@ -523,7 +538,7 @@ async function loadLong() {
 
 function onClick(e) {
   const b = e.target.closest('[data-act]');
-  if (!b || !root.contains(b)) return;
+  if (!b || !(root.contains(b) || b.closest('.fl-hacts'))) return;
   const act = b.dataset.act;
   const host = b.dataset.host;
   if (b.getAttribute('aria-disabled') === 'true') {
@@ -618,6 +633,8 @@ export default {
     clearInterval(tickTimer);
     root?.removeEventListener('click', onClick);
     root?.removeEventListener('toggle', onToggle, true);
+    root?.removeEventListener('input', onInput);
+    ctx?.header?.actions?.querySelector('.fl-hacts')?.remove();
     root = null;
     ctx = null;
   },
