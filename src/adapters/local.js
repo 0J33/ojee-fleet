@@ -370,6 +370,88 @@ function parseNetDev(text) {
 
 /* ── probe ─────────────────────────────────────────────────────────────── */
 
+/* ── fans, package power, zram, top processes ──────────────────────────── */
+
+/** Every fan hwmon reports, in rpm. Null when none does (the LOQ's own fans
+    vanish whenever its platform driver cannot bind; that is the truth then). */
+async function fans() {
+  const base = `${HOST_ROOT}/sys/class/hwmon`;
+  let dirs = [];
+  try { dirs = await fsp.readdir(base); } catch { return null; }
+  const out = [];
+  for (const d of dirs) {
+    let files = [];
+    try { files = await fsp.readdir(`${base}/${d}`); } catch { continue; }
+    for (const f of files.filter((x) => /^fan\d+_input$/.test(x)).sort()) {
+      const rpm = Number(await readOr(`${base}/${d}/${f}`, ''));
+      if (Number.isFinite(rpm) && rpm >= 0 && rpm < 30000) out.push(rpm);
+    }
+  }
+  return out.length ? out : null;
+}
+
+/** CPU package watts from RAPL: a cumulative energy counter, so a delta. */
+let raplPrev = null;
+async function cpuWatts(now) {
+  const raw = Number(await readOr(`${HOST_ROOT}/sys/class/powercap/intel-rapl:0/energy_uj`, ''));
+  if (!Number.isFinite(raw)) return null;
+  const was = raplPrev;
+  raplPrev = { uj: raw, at: now };
+  if (!was || now <= was.at || raw < was.uj) return null;       // first sample, or the counter wrapped
+  return Math.round(((raw - was.uj) / 1e6 / ((now - was.at) / 1000)) * 10) / 10;
+}
+
+/** /proc/swaps split into zram (compressed RAM) and real swap on disk. */
+function parseSwaps(text) {
+  let zram = null;
+  for (const line of String(text || '').split('\n').slice(1)) {
+    const [name, , size, used] = line.trim().split(/\s+/);
+    if (!name || !/zram/.test(name)) continue;
+    zram = zram || { used: 0, total: 0 };
+    zram.used += Number(used) * 1024;
+    zram.total += Number(size) * 1024;
+  }
+  return zram;
+}
+
+/**
+ * The top processes by CPU right now: a delta of utime+stime per pid between
+ * two samples, like top. `ps`'s %CPU is a lifetime average and would put a
+ * browser started a week ago above the game that is pinning the CPU now.
+ */
+let procPrev = null;
+async function topProcesses(now, cores) {
+  const base = fs.existsSync(`${HOST_ROOT}/proc/1/stat`) ? `${HOST_ROOT}/proc` : '/proc';
+  let pids = [];
+  try { pids = (await fsp.readdir(base)).filter((x) => /^\d+$/.test(x)); } catch { return null; }
+  const ticks = new Map();
+  const names = new Map();
+  await Promise.all(pids.map(async (pid) => {
+    const st = await readOr(`${base}/${pid}/stat`, null);
+    if (!st) return;
+    const close = st.lastIndexOf(')');
+    const name = st.slice(st.indexOf('(') + 1, close);
+    const f = st.slice(close + 2).split(' ');
+    ticks.set(pid, Number(f[11]) + Number(f[12]));
+    names.set(pid, name);
+  }));
+  const was = procPrev;
+  procPrev = { ticks, at: now };
+  if (!was || now <= was.at) return null;
+  const secs = (now - was.at) / 1000;
+  const byName = new Map();
+  for (const [pid, t] of ticks) {
+    const before = was.ticks.get(pid);
+    if (before == null || t < before) continue;
+    const pctAll = ((t - before) / 100 / secs) * 100 / (cores || 1);
+    if (pctAll <= 0) continue;
+    const n = names.get(pid);
+    byName.set(n, (byName.get(n) || 0) + pctAll);
+  }
+  return [...byName].sort((a, b) => b[1] - a[1]).slice(0, 5)
+    .map(([name, p]) => ({ name, cpu: Math.round(p * 10) / 10 }));
+}
+
 export async function probe(host) {
   try {
     const [stat, meminfo, uptimeRaw, loadRaw, netRaw, fsList, tempC, g, svcs, drives, bat] = await Promise.all([
@@ -385,6 +467,7 @@ export async function probe(host) {
       physicalDisks(),
       battery(),
     ]);
+    const [fanList, swapsRaw] = await Promise.all([fans(), readOr('/proc/swaps', '')]);
     const storage = joinStorage(fsList, drives);
 
     const now = Date.now();
@@ -410,6 +493,9 @@ export async function probe(host) {
     const { mem, swap } = parseMeminfo(meminfo);
     const load = (loadRaw || '').trim().split(/\s+/).slice(0, 3).map(Number);
     const cores = (stat || '').split('\n').filter((l) => /^cpu\d+ /.test(l)).length || null;
+    const watts = await cpuWatts(now);
+    const top = await topProcesses(now, cores).catch(() => null);
+    const zram = parseSwaps(swapsRaw);
     const model = ((await readOr('/proc/cpuinfo', '')) || '')
       .split('\n').find((l) => l.startsWith('model name'))?.split(':')[1]?.trim() || null;
     const osRelease = await readOr(`${HOST_ROOT}/etc/os-release`, '');
@@ -435,9 +521,13 @@ export async function probe(host) {
         cores,
         tempC,
         load: load.length === 3 && load.every(Number.isFinite) ? load : null,
+        watts,
       },
       mem,
       swap,
+      zram,
+      fans: fanList,
+      top,
       gpu: g,
       net,
       battery: bat ? { pct: bat.pct, state: bat.state, watts: bat.watts, health: bat.health } : null,
@@ -460,5 +550,6 @@ export async function action(name) {
   return { ok: true, restarted: name };
 }
 
+export { parseSwaps };
 export const describe = () => 'this machine (/proc, /sys, docker.sock)';
 export { HOST_ROOT };

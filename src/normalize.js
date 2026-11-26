@@ -41,8 +41,18 @@ export function offlineHost(host, error) {
    Deliberately few, and each one is a number someone would act on. A page
    that warns about everything is a page nobody reads. */
 export const LIMITS = {
-  cpuTempC: 88,          // sustained above this is throttling territory
-  gpuTempC: 85,
+  // Heat. Colour first: below warnC is normal, warnC..errC is warm, errC and
+  // up is hot. Alerts are about HOLDING a temperature, not touching it — a
+  // laptop that spikes to 96 °C compiling for twenty seconds is fine, one that
+  // sits at 98 °C for six minutes is cooking (LOQ, 2026-11-26: a hard lockup
+  // at a sustained 100 °C). Every one of these can be set per host (`limits`)
+  // and from the console's settings (threshold of fleet.cpu-temp*).
+  tempWarnC: 80,         // colour: warm
+  tempErrC: 90,          // colour: hot
+  cpuTempC: 90,          // alert `cpu-temp` (warn) when held for heatHoldMs
+  cpuCritC: 95,          // alert `cpu-temp-critical` (err, blocking) when held for heatHoldMs
+  gpuTempC: 87,          // alert `gpu-temp` (warn) when held for heatHoldMs
+  heatHoldMs: 5 * 60_000,
   diskPct: 90,           // below 10% free is when ext4 starts fragmenting badly
   diskCritPct: 96,
   memPct: 93,
@@ -79,7 +89,28 @@ export const HYSTERESIS = { ms: 90_000, checks: 3 };
  * run was an alert, a ping and a red card that then cleared by itself. Thirty
  * minutes of being failed is a unit that is actually broken.
  */
-export const HYSTERESIS_BY_KIND = { 'unit-failed': { ms: 30 * 60_000 } };
+export const HYSTERESIS_BY_KIND = {
+  'unit-failed': { ms: 30 * 60_000 },
+  // Heat has to be HELD (LIMITS.heatHoldMs, overridable per host): see LIMITS.
+  'cpu-temp': { ms: LIMITS.heatHoldMs },
+  'cpu-temp-critical': { ms: LIMITS.heatHoldMs },
+  'gpu-temp': { ms: LIMITS.heatHoldMs },
+};
+
+/** A host's effective limits: the defaults, then its config's `limits`. */
+export function limitsFor(host) {
+  const out = { ...LIMITS };
+  for (const [k, v] of Object.entries(host?.limits || {})) {
+    if (k in LIMITS && Number.isFinite(Number(v))) out[k] = Number(v);
+  }
+  return out;
+}
+
+/** ok / warn / err for a temperature, on a host's own scale. */
+export function tempState(c, limits = LIMITS) {
+  if (!Number.isFinite(c)) return null;
+  return c >= limits.tempErrC ? 'err' : c >= limits.tempWarnC ? 'warn' : 'ok';
+}
 
 /**
  * What makes two alerts on consecutive polls "the same alert". Not the text:
@@ -98,7 +129,8 @@ export const alertKey = (a) => a.key
 export const ALERT_KINDS = {
   unreachable: 'the host did not answer',
   stale: 'the host answered, but the reading is old',
-  'cpu-temp': 'CPU temperature above the limit',
+  'cpu-temp': 'CPU held above its hot limit',
+  'cpu-temp-critical': 'CPU held at a critical temperature',
   'cpu-throttle': 'the CPU throttled since the last sample',
   'gpu-temp': 'GPU temperature above the limit',
   disk: 'a filesystem is filling up',
@@ -116,7 +148,7 @@ export const ALERT_KINDS = {
  * the host itself calls failed, say); these are the ones that can be decided
  * from numbers alone, so they are decided in one place.
  */
-export function deriveAlerts(h) {
+export function deriveAlerts(h, limits = LIMITS) {
   const out = [];
   const add = (kind, severity, text, hint) => out.push({ kind, severity, text, hint });
 
@@ -125,17 +157,22 @@ export function deriveAlerts(h) {
     return out;                                   // nothing else is knowable
   }
 
-  if (h.at && Date.now() - h.at > LIMITS.staleMs) {
+  if (h.at && Date.now() - h.at > limits.staleMs) {
     add('stale', 'warn', `${h.name} has not reported for ${Math.round((Date.now() - h.at) / 60000)} min`);
   }
 
+  // Raised on every poll the reading is over the line; whether it has been
+  // over long enough to COUNT is the poller's call (HYSTERESIS_BY_KIND).
   const cpuTemp = h.cpu?.tempC;
-  if (Number.isFinite(cpuTemp) && cpuTemp >= LIMITS.cpuTempC) {
-    add('cpu-temp', 'warn', `${h.name} CPU at ${Math.round(cpuTemp)}°C`, 'sustained load or a fan problem');
+  if (Number.isFinite(cpuTemp) && cpuTemp >= limits.cpuTempC) {
+    out.push({ kind: 'cpu-temp', severity: 'warn', key: 'cpu-temp', text: `${h.name} CPU at ${Math.round(cpuTemp)} °C`, hint: 'sustained load or a fan problem' });
+  }
+  if (Number.isFinite(cpuTemp) && cpuTemp >= limits.cpuCritC) {
+    out.push({ kind: 'cpu-temp-critical', severity: 'err', blocking: true, key: 'cpu-temp-critical', text: `${h.name} CPU at ${Math.round(cpuTemp)} °C`, hint: 'critical — close the load or check the fans' });
   }
   const gpuTemp = h.gpu?.tempC;
-  if (Number.isFinite(gpuTemp) && gpuTemp >= LIMITS.gpuTempC) {
-    add('gpu-temp', 'warn', `${h.name} GPU at ${Math.round(gpuTemp)}°C`);
+  if (Number.isFinite(gpuTemp) && gpuTemp >= limits.gpuTempC) {
+    out.push({ kind: 'gpu-temp', severity: 'warn', key: 'gpu-temp', text: `${h.name} GPU at ${Math.round(gpuTemp)} °C` });
   }
 
   for (const d of h.disks || []) {
@@ -145,21 +182,21 @@ export function deriveAlerts(h) {
     // problem getting worse, not a new one that has to be waited out again.
     const key = `disk:${d.mount || d.label}`;
     const text = `${h.name} ${d.label} is ${Math.round(p)}% full`;
-    if (p >= LIMITS.diskCritPct) out.push({ kind: 'disk-critical', severity: 'err', text, hint: 'almost out of space', key });
-    else if (p >= LIMITS.diskPct) out.push({ kind: 'disk', severity: 'warn', text, key });
+    if (p >= limits.diskCritPct) out.push({ kind: 'disk-critical', severity: 'err', text, hint: 'almost out of space', key });
+    else if (p >= limits.diskPct) out.push({ kind: 'disk', severity: 'warn', text, key });
   }
 
   const memPct = h.mem ? (Number.isFinite(h.mem.pct) ? h.mem.pct : pct(h.mem.used, h.mem.total)) : UNKNOWN;
-  if (Number.isFinite(memPct) && memPct >= LIMITS.memPct) {
+  if (Number.isFinite(memPct) && memPct >= limits.memPct) {
     add('memory', 'warn', `${h.name} memory at ${Math.round(memPct)}%`);
   }
   const swapPct = h.swap ? pct(h.swap.used, h.swap.total) : UNKNOWN;
-  if (Number.isFinite(swapPct) && swapPct >= LIMITS.swapPct) {
+  if (Number.isFinite(swapPct) && swapPct >= limits.swapPct) {
     add('swap', 'warn', `${h.name} is ${Math.round(swapPct)}% into swap`, 'something is over-committed');
   }
 
   const bat = h.battery;
-  if (bat && Number.isFinite(bat.pct) && bat.pct <= LIMITS.batteryPct && bat.state !== 'charging') {
+  if (bat && Number.isFinite(bat.pct) && bat.pct <= limits.batteryPct && bat.state !== 'charging') {
     add('battery', 'warn', `${h.name} battery at ${Math.round(bat.pct)}%`);
   }
 

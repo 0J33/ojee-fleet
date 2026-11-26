@@ -20,7 +20,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { HYSTERESIS, HYSTERESIS_BY_KIND, alertKey, applyMutes, deriveAlerts, worst } from './normalize.js';
+import {
+  HYSTERESIS, HYSTERESIS_BY_KIND, alertKey, applyMutes, deriveAlerts, limitsFor, worst,
+} from './normalize.js';
 
 import * as tegAdapter from './adapters/teg.js';
 import * as agentAdapter from './adapters/agent.js';
@@ -48,6 +50,8 @@ const ADAPTERS = {
  */
 export const PROBE_DEADLINE_MS = 30_000;
 
+const HEAT_KINDS = new Set(['cpu-temp', 'cpu-temp-critical', 'gpu-temp']);
+
 export function withDeadline(promise, ms, label = 'probe') {
   let t;
   const timeout = new Promise((_, reject) => {
@@ -58,9 +62,13 @@ export function withDeadline(promise, ms, label = 'probe') {
 
 export class Poller extends EventEmitter {
   constructor({
-    hosts, intervalMs = 10_000, historyLength = 90, now = Date.now, sustain = HYSTERESIS,
+    hosts, intervalMs = 10_000, historyLength = 90, now = Date.now, sustain = HYSTERESIS, store = null,
   }) {
     super();
+    /** The long, persisted history (src/history.js), when there is one. */
+    this.store = store;
+    /** Limits the console's settings pushed (fleet.cpu-temp thresholds...), over every host's own. */
+    this.overrides = {};
     this.hosts = hosts;
     // How long, and over how many polls, an alert has to hold before it
     // counts. See `confirm()` below and HYSTERESIS in normalize.js.
@@ -217,8 +225,10 @@ export class Poller extends EventEmitter {
     // Muting happens before the roll-up, not at render time: an alert this
     // host was told not to raise must not colour it red, must not flip its
     // status, and therefore must not reach Discord or a phone either.
+    const limits = { ...limitsFor(host), ...this.overrides };
+    next.limits = limits;
     const raised = applyMutes(
-      [...(next.alerts || []), ...deriveAlerts(next)],
+      [...(next.alerts || []), ...deriveAlerts(next, limits)],
       host.mute,
       host.muteServices,
     );
@@ -231,7 +241,7 @@ export class Poller extends EventEmitter {
     const inGrace = !next.online && next.pending;
     const { confirmed, pending } = inGrace
       ? { confirmed: (prev?.alerts || []).filter((a) => a.kind !== 'unreachable'), pending: prev?.pendingAlerts || [] }
-      : this.confirm(host, raised);
+      : this.confirm(host, raised, limits);
     next.alerts = confirmed;
     next.pendingAlerts = pending;
     next.muted = host.mute || [];
@@ -280,7 +290,7 @@ export class Poller extends EventEmitter {
    * `unreachable` is exempt: a host that stops answering has its own, longer
    * grace window (`graceMs`), which has already been applied by now.
    */
-  confirm(host, raised) {
+  confirm(host, raised, limits = null) {
     const ms = Number.isFinite(host.sustainMs) ? host.sustainMs : this.sustain.ms;
     const checks = Number.isFinite(host.sustainChecks) ? host.sustainChecks : this.sustain.checks;
     const before = this.alertClock.get(host.id) || new Map();
@@ -302,7 +312,8 @@ export class Poller extends EventEmitter {
       };
       // A kind with its own, longer hold (HYSTERESIS_BY_KIND) takes the longer
       // of that and the host's.
-      const kms = Math.max(ms, this.byKind[a.kind]?.ms ?? 0);
+      const heat = HEAT_KINDS.has(a.kind) && limits && Number.isFinite(limits.heatHoldMs) && this.byKind[a.kind];
+      const kms = Math.max(ms, heat ? limits.heatHoldMs : (this.byKind[a.kind]?.ms ?? 0));
       if (!clock.confirmed) {
         clock.confirmed = a.kind === 'unreachable'
           || (clock.checks >= checks && t - clock.since >= kms);
@@ -364,6 +375,7 @@ export class Poller extends EventEmitter {
     });
     while (ring.length > this.historyLength) ring.shift();
     this.history.set(id, ring);
+    this.store?.add(id, h, h.at || this.now());
   }
 
   get(id) { return this.state.get(id) || null; }

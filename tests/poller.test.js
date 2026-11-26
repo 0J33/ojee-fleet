@@ -308,7 +308,7 @@ test('a roaming machine that leaves is away, not down', async (t) => {
 });
 
 test('muting', async (t) => {
-  const hot = () => healthy({ cpu: { pct: 90, tempC: 96, throttled: 100 } });
+  const hot = () => healthy({ cpu: { pct: 90, tempC: 92, throttled: 100 } });
 
   await t.test('an unmuted host raises the rule', async () => {
     const p = newPoller([hot()]);
@@ -329,7 +329,7 @@ test('muting', async (t) => {
 
   await t.test('muting one kind leaves the others alone', async () => {
     const p = newPoller([healthy({
-      cpu: { pct: 90, tempC: 96 },
+      cpu: { pct: 90, tempC: 92 },
       disks: [{ label: '/', pct: 99 }],
     })]);
     await p.probeOne({ ...HOST, mute: ['cpu-temp'] });
