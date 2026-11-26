@@ -80,6 +80,64 @@ export function spark(points, { status = null, threshold = null, min = null, max
  *   s.body       the scrolling body element (render into it)
  *   s.close(v)   closes; `await s.done` resolves with v (or null)
  */
+/**
+ * While any sheet is open on a phone the page behind must not scroll: iOS
+ * hands a scroll that starts on a short sheet (or one already at its top) to
+ * whatever is underneath. Counted, so nested sheets release in order.
+ */
+let locks = 0;
+export function lockScroll(on) {
+  locks = Math.max(0, locks + (on ? 1 : -1));
+  document.documentElement.classList.toggle('sheet-lock', locks > 0);
+}
+
+/**
+ * Drag a bottom sheet down to close it (phones only). The grab handle and the
+ * header always drag; the body drags only when it is scrolled to the top and
+ * the finger moves down, otherwise it scrolls normally. 1:1 tracking,
+ * rubber-band upward, a flick or a third of the height closes it.
+ * Touch events rather than pointer events: a pointer stream is cancelled the
+ * moment the browser decides the gesture is a scroll.
+ */
+export function sheetGestures(el, { dismiss, handle = '[data-grab], .sheet-h, .ih', body = '.sheet-b, .ibody', wide = 700 } = {}) {
+  let y0 = 0; let t0 = 0; let dy = 0; let mode = null; let sc = null;
+  const active = () => !matchMedia(`(min-width: ${wide}px)`).matches;
+  const apply = (d) => { el.style.transform = `translateY(${d < 0 ? -(Math.abs(d) * 60) / (60 + Math.abs(d)) : d}px)`; };
+  el.addEventListener('touchstart', (e) => {
+    if (!active() || e.touches.length !== 1) return;
+    const t = e.target;
+    if (t.closest('input, textarea, select, [contenteditable="true"]')) return;
+    y0 = e.touches[0].clientY; t0 = performance.now(); dy = 0; mode = null;
+    if (t.closest(handle) && !t.closest('button, a')) mode = 'drag';
+    else { sc = t.closest(body); mode = sc ? 'maybe' : 'drag'; }
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (!mode) return;
+    const d = e.touches[0].clientY - y0;
+    if (mode === 'maybe') {
+      if (Math.abs(d) < 4) return;
+      if (d > 0 && sc.scrollTop <= 0) { mode = 'drag'; y0 = e.touches[0].clientY; t0 = performance.now(); }
+      else { mode = null; return; }
+    }
+    if (mode === 'drag') {
+      e.preventDefault();
+      dy = e.touches[0].clientY - y0;
+      el.style.transition = 'none';
+      apply(dy);
+    }
+  }, { passive: false });
+  const end = () => {
+    if (mode !== 'drag') { mode = null; return; }
+    mode = null;
+    const v = dy / Math.max(1, performance.now() - t0);
+    el.style.transition = '';
+    el.style.transform = '';
+    if (dy > el.offsetHeight * 0.3 || v > 0.11) dismiss();
+  };
+  el.addEventListener('touchend', end);
+  el.addEventListener('touchcancel', end);
+}
+
 export function openSheet({ title = '', sub = '', body = '', actions = [], width = 480, onClose = null, flush = false, root = null } = {}) {
   const host = root || document.getElementById('app') || document.body;
   const opener = document.activeElement;
@@ -109,6 +167,7 @@ export function openSheet({ title = '', sub = '', body = '', actions = [], width
     closed = true;
     document.removeEventListener('keydown', onKey, true);
     el.classList.remove('on'); bg.classList.remove('on');
+    lockScroll(false);
     setTimeout(() => { el.remove(); bg.remove(); }, 300);
     opener?.focus?.({ preventScroll: true });
     onClose?.(v);
@@ -136,13 +195,10 @@ export function openSheet({ title = '', sub = '', body = '', actions = [], width
   el.addEventListener('click', (e) => { if (e.target.closest('[data-sheet-close]')) close(null); });
   bg.addEventListener('click', () => close(null));
   document.addEventListener('keydown', onKey, true);
-  // Drag to dismiss (phones): 1:1, a flick is enough, resistance upward.
-  let y0 = 0; let t0 = 0; let dy = 0; let drag = false;
-  const grab = el.querySelector('[data-grab]');
-  grab.addEventListener('pointerdown', (e) => { drag = true; y0 = e.clientY; t0 = performance.now(); dy = 0; grab.setPointerCapture(e.pointerId); el.style.transition = 'none'; });
-  grab.addEventListener('pointermove', (e) => { if (!drag) return; dy = e.clientY - y0; el.style.transform = `translateY(${dy < 0 ? -(Math.abs(dy) * 60) / (60 + Math.abs(dy)) : dy}px)`; });
-  const end = () => { if (!drag) return; drag = false; const v = dy / Math.max(1, performance.now() - t0); el.style.transition = ''; el.style.transform = ''; if (dy > el.offsetHeight * 0.3 || v > 0.11) close(null); };
-  grab.addEventListener('pointerup', end); grab.addEventListener('pointercancel', end);
+  // Drag to dismiss (phones): from the handle/header, or the body at its top.
+  sheetGestures(el, { dismiss: () => close(null) });
+  bg.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
+  lockScroll(true);
   host.append(bg, el);
   void el.offsetWidth;
   bg.classList.add('on'); el.classList.add('on');
@@ -211,4 +267,4 @@ export function ago(ms, now = Date.now()) {
   return `${Math.round(h / 24)}d`;
 }
 
-export default { esc, ic, col, mv, metric, tag, st, bar, spark, placeSegs, bindSeg, ensureSprite, ago, openSheet };
+export default { esc, ic, col, mv, metric, tag, st, bar, spark, placeSegs, bindSeg, ensureSprite, ago, openSheet, sheetGestures, lockScroll };

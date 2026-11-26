@@ -651,3 +651,21 @@ table.t tr.grp td{background:var(--raised);font-size:12px;font-weight:600;color:
 .table-wrap{overflow-x:auto}
 .badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg-2)}
 .panel>.empty{padding:32px 16px}
+
+/* Phone sheets (More, inbox, module sheets): 2026-11-26 fixes.
+   - the last thing in a bottom sheet clears the home indicator;
+   - the header drags as well as the handle (touch-action none there only);
+   - while a sheet is open the page behind cannot scroll (iOS hands short or
+     top-of-list scrolls to whatever is underneath). */
+.inbox>.ibody:last-child{padding-bottom:calc(8px + var(--safe-b))}
+.sheet>.sheet-b:last-child{padding-bottom:calc(16px + var(--safe-b))}
+.sheet>.sheet-b.flush:last-child{padding-bottom:var(--safe-b)}
+.inbox .ih,.sheet .sheet-h{touch-action:none}
+.inbox .ibody,.sheet .sheet-b{touch-action:pan-y;-webkit-overflow-scrolling:touch}
+html.sheet-lock,html.sheet-lock body{overscroll-behavior:none}
+html.sheet-lock .main,html.sheet-lock .page-scroll{overflow:hidden!important;touch-action:none}
+.scrim.on,.sheet-bg.on{touch-action:none}
+/* Phones: no input below 16px, or iOS zooms the page when it is focused
+   (search, palette, forms). Pinch zoom is also off (viewport meta). */
+@media (max-width:1199px){input,select,textarea,[contenteditable="true"]{font-size:16px!important}}
+html{touch-action:manipulation}
