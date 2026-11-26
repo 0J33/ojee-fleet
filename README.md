@@ -1,7 +1,27 @@
-# ojee-fleet
+# ojee-fleet — Machines
 
 Every machine that is mine, on one page — what each one is doing, what is wrong with it, and
-which of its services stopped.
+which of its services stopped. Since the 2026-11 redesign it is the console's **Machines** page
+and absorbs ojee-remote's device list: each host card carries **Screen / Shell / Files** (which
+open ojee-remote's own session pages in place), the screen's lock state, and for the laptop that
+dual-boots, **Reboot to Windows / Linux** (a one-shot BootNext through ojee-remote's ssh).
+
+## 2026-11 redesign in one screen
+
+- **Cards** (ojee-ui3): CPU %, CPU °C coloured on the host's own scale (`tempWarnC` / `tempErrC`),
+  memory + swap/zram, disk, GPU, top processes, fans and CPU package watts where the host reports
+  them; Details per host keeps everything the old Hosts / Logs / Processes views had.
+- **History**: one point per host per minute for 48 h, saved to `FLEET_DATA_DIR/history.json`
+  (a volume) — the 2 h / 24 h lines survive a redeploy. `GET /api/hosts/:id/history?window=2h|6h|24h|48h`.
+- **Heat is held, not touched**: `cpu-temp` (≥ 90 °C), `cpu-temp-critical` (≥ 95 °C, blocking) and
+  `gpu-temp` (≥ 87 °C) must hold for 5 min (`heatHoldMs`). LOQ is no longer muted.
+- **Summary**: `metrics` (4), `spark`, `rows` (one per host: 4 metrics + 2 h spark), alerts with
+  stable `key` = `fleet.<kind>.<host>[.<subject>]`, `kind`, `blocking`. No 3D `model`.
+- **Manifest**: `alertKinds` — every kind with its default channel (toast / inbox / off) and
+  thresholds; the console's settings push thresholds back through `POST /api/notify/prefs`.
+- **ojee-remote link**: `FLEET_REMOTE_ORIGIN` (e.g. `http://ojee-remote:8200`) and per-host
+  `"remote": ["loq-linux", "loq-windows"]`. `POST /api/hosts/:id/boot {to, confirm: true}`.
+- `muteServices` takes a prefix (`"odysseus-*"`).
 
 Runs standalone or as an [ojee-console](https://github.com/0J33/ojee-console) module.
 
@@ -267,13 +287,15 @@ private deployment repo can commit it. Credentials come from the environment:
 | `DOCKER_SOCK` | default `/var/run/docker.sock` — the `local` adapter's services |
 | `DISCORD_WEBHOOK` | optional; transitions are posted here |
 | `FLEET_POLL_MS` | default 10000 |
-| `FLEET_DOWN_GRACE_MS` | default 300000 — how long a host may be missing before it is news |
+| `FLEET_DOWN_GRACE_MS` | default 180000 — how long a host may be missing before it is news |
 | `HOST_<ID>_GRACE_MS` | the same, for one host |
 | `HOST_<ID>_ROAMING` | `1` for a machine that leaves — its absence is `away`, not an alert |
 | `FLEET_SUSTAIN_MS` | default 90000 — how long an alert must hold before it counts |
 | `FLEET_SUSTAIN_CHECKS` | default 3 — and over how many consecutive polls |
 | `HOST_<ID>_SUSTAIN_MS` | the same, for one host |
 | `PORT` / `BIND` | default `0.0.0.0:8400` |
+| `FLEET_DATA_DIR` | where the 48 h history lives (default `./data`; `/data` volume in the container) |
+| `FLEET_REMOTE_ORIGIN` | the ojee-remote gateway, for Screen / Shell / Files, lock state, boot switching |
 
 Mounted in a console, add it to `config/console.json` like any other module.
 
