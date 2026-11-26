@@ -25,6 +25,9 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { ADAPTERS, Poller } from './poller.js';
 import { Notifier } from './notify.js';
+import { HistoryStore } from './history.js';
+import { RemoteLink } from './remote.js';
+import { buildSummary, decorate, ALERT_KINDS_MANIFEST, applyPrefs } from './summary.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..');
@@ -34,12 +37,27 @@ const app = express();
 app.use(express.json({ limit: '64kb' }));
 app.disable('x-powered-by');
 
+// Two days of one-minute points per host, on disk: the cards' 2 h sparklines
+// and the 24 h charts survive a redeploy.
+const store = new HistoryStore({ file: path.join(config.dataDir, 'history.json') });
+const saver = setInterval(() => store.save(), 60_000);
+saver.unref?.();
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.once(sig, () => { store.save(); process.exit(0); });
+}
+
 const poller = new Poller({
   hosts: config.hosts,
   intervalMs: config.intervalMs,
   historyLength: config.historyLength,
   sustain: config.sustain,
+  store,
 }).start();
+
+const remote = new RemoteLink({ origin: config.remoteOrigin, hosts: config.hosts }).start();
+
+/** The snapshot every reader gets: the poller's, plus history and remote. */
+const view = () => decorate(poller.snapshot(), { hosts: config.hosts, store, remote });
 
 const notifier = new Notifier(config.notify);
 
@@ -82,23 +100,26 @@ poller.on('transition', (t) => {
 app.post('/api/notify/prefs', (req, res) => {
   if (!req.body || typeof req.body.types !== 'object') return res.status(400).json({ error: 'types is required' });
   notifyPrefs = { quiet: req.body.quiet || null, types: req.body.types };
-  res.json({ ok: true });
+  // Thresholds the person set in the console (Settings -> notifications)
+  // replace the defaults on every host.
+  poller.overrides = applyPrefs(req.body.types);
+  res.json({ ok: true, limits: poller.overrides });
 });
 
 /* ── the manifest ───────────────────────────────────────────────────────── */
 
+// One page. `hosts`, `services` and `alerts` stay valid deep links (old
+// notifications and overview alerts point at them) and land on the same page,
+// scrolled to that part.
 const VIEWS = [
-  { id: 'overview', label: 'Overview', icon: 'i-grid' },
-  { id: 'hosts', label: 'Hosts', icon: 'i-server' },
-  { id: 'services', label: 'Services', icon: 'i-gauge' },
-  { id: 'alerts', label: 'Alerts', icon: 'i-warn' },
+  { id: 'machines', label: 'Machines', icon: 'i-server' },
 ];
 
 app.get('/module.json', (req, res) => {
   res.json({
     id: process.env.MODULE_ID || 'fleet',
-    name: process.env.MODULE_NAME || 'Fleet',
-    version: '1.0.0',
+    name: process.env.MODULE_NAME || 'Machines',
+    version: '2.0.0',
     // The shell draws this in the sidebar. Declaring it beats letting the
     // shell borrow the first view's icon, which made every module that opens
     // on an overview render the same square as every other one.
@@ -108,6 +129,10 @@ app.get('/module.json', (req, res) => {
     health: '/api/health',
     capabilities: ['summary', 'sse', 'notify'],
     notifications: NOTIFY_TYPES,
+    // Every alert this module can raise, for the console's one settings table
+    // and its inbox. `kind` is what an alert's `kind` says; `key`s are
+    // `<kind>.<host>[.<subject>]` and never carry a number.
+    alertKinds: ALERT_KINDS_MANIFEST,
   });
 });
 
@@ -129,125 +154,50 @@ app.get('/api/health', (req, res) => {
 /* ── the console's front page ───────────────────────────────────────────── */
 
 app.get('/api/summary', (req, res) => {
-  const s = poller.snapshot();
-  // A host inside its grace window is not reported as down: it is a blip that
-  // has not yet earned anyone's attention, and saying "1 of 3 unreachable" on
-  // the front page IS telling you about it.
-  // A roaming machine that is away is neither down nor blipping — it is a
-  // laptop in a bag, and the front page says where it is without counting it
-  // against anything.
-  const away = s.hosts.filter((h) => h.away);
-  const down = s.hosts.filter((h) => !h.online && !h.pending && !h.away);
-  const blipping = s.hosts.filter((h) => !h.online && h.pending);
-  const degraded = s.hosts.filter((h) => h.online && h.status !== 'ok');
-  const awayNote = away.length ? ` · ${away.map((h) => h.name).join(', ')} away` : '';
-
-  const headline = down.length
-    ? `${down.length} of ${s.total} unreachable`
-    : degraded.length
-      ? `${s.total} hosts · ${degraded.length} need attention`
-      : blipping.length
-        ? `${s.total} hosts · ${blipping.map((h) => h.name).join(', ')} not answering`
-        : away.length
-          ? `${s.online} up${awayNote}`
-          : `${s.total} hosts · all healthy`;
-
-  // Four facts, and each one has to be worth the space on a front page.
-  //
-  // This used to be one fact per host reading "4% cpu", which is the number
-  // most likely to be interesting on a graph and least likely to be worth
-  // knowing at a glance: it is 4% almost always, and when it is not, it is
-  // usually fine anyway. What you actually want to know before opening
-  // anything is whether everything is up, whether anything stopped, and
-  // whether something is about to run out of disk.
-  // An away host's services and disks are the last numbers it sent before it
-  // left. Counting them would report "all 31 running" for services that are,
-  // right now, not running anywhere — so only machines that are here count.
-  const present = s.hosts.filter((h) => !h.away);
-  const services = present.flatMap((h) => h.services || []);
-  const running = services.filter((x) => x.ok).length;
-  const tightest = present
-    .flatMap((h) => (h.disks || []).map((d) => ({ ...d, host: h.name })))
-    .filter((d) => Number.isFinite(d.pct))
-    .sort((a, b) => b.pct - a.pct)[0];
-  // A host that answers but whose sample is old is a different failure from
-  // one that does not answer at all, and the difference matters: the page is
-  // showing you numbers that are no longer true.
-  const stale = s.hosts.filter((h) => h.online && h.at && Date.now() - h.at > 120_000);
-
-  // Facts are EXCEPTIONS, not statistics. A number that reads the same every
-  // day teaches you to stop reading the card — "fullest disk: 56%" and
-  // "longest up: 57d" were true, stable, and worth nothing at a glance. So a
-  // measurement only earns a slot once it crosses into being worth acting on;
-  // when nothing has, the card is short, which is itself the report.
-  const facts = [
-    {
-      k: 'Machines',
-      v: down.length
-        ? `${s.online} up · ${down.map((h) => h.name).join(', ')} down${awayNote}`
-        : blipping.length
-          ? `${s.online} up · ${blipping.map((h) => h.name).join(', ')} retrying${awayNote}`
-          : away.length
-            ? `${s.online} up${awayNote}`
-            : `${s.total} up`,
-    },
-    services.length
-      ? {
-        k: 'Services',
-        v: running === services.length
-          ? `all ${services.length} running`
-          : `${services.length - running} stopped of ${services.length}`,
-      }
-      : null,
-    // Only once a disk is actually filling up.
-    tightest && tightest.pct >= 80
-      ? { k: 'Disk', v: `${tightest.host} ${tightest.label} · ${Math.round(tightest.pct)}% full` }
-      : null,
-    stale.length
-      ? { k: 'Stale', v: `${stale.map((h) => h.name).join(', ')} not reporting` }
-      : null,
-    s.alerts.length
-      ? { k: 'Needs attention', v: `${s.alerts.length} alert${s.alerts.length === 1 ? '' : 's'}` }
-      : null,
-  ].filter(Boolean).slice(0, 4);
-
-  res.json({
-    status: s.status === 'unknown' ? 'warn' : s.status,
-    headline,
-    facts,
-    alerts: s.alerts.slice(0, 5).map((a) => ({
-      text: a.text, severity: a.severity, view: 'alerts',
-    })),
-    // The console draws this module as a rack: one tower per machine, its
-    // frame lit while the machine answers, a bead per stopped service and a
-    // fill that tracks load. Hosts go in configuration order so a tower means
-    // the same machine from one poll to the next, and an away laptop simply
-    // goes dark — the frame with nothing on it is "not here", which is what
-    // it is.
-    model: {
-      hosts: s.hosts.map((h) => ({
-        name: h.name,
-        up: h.online === true,
-        load: Number.isFinite(h.cpu?.pct) ? Math.max(0, Math.min(1, h.cpu.pct / 100)) : 0,
-        failing: (h.services || []).filter((x) => !x.ok).length,
-      })),
-    },
-  });
+  res.json(buildSummary(view(), { hosts: config.hosts, store }));
 });
 
 /* ── hosts ──────────────────────────────────────────────────────────────── */
 
-app.get('/api/hosts', (req, res) => res.json(poller.snapshot()));
+app.get('/api/hosts', (req, res) => res.json(view()));
 
 app.get('/api/hosts/:id', (req, res) => {
-  const h = poller.get(req.params.id);
+  const h = view().hosts.find((x) => x.id === req.params.id);
   if (!h) return res.status(404).json({ error: 'no such host' });
   return res.json({ ...h, history: poller.history.get(req.params.id) || [] });
 });
 
+/**
+ * History. `?window=15m` is the 10-second ring (in memory); anything longer
+ * is the persisted minute history: 2h, 6h, 24h, 48h.
+ */
+const WINDOWS = { '2h': 2, '6h': 6, '24h': 24, '48h': 48 };
 app.get('/api/hosts/:id/history', (req, res) => {
   if (!poller.get(req.params.id)) return res.status(404).json({ error: 'no such host' });
-  return res.json({ samples: poller.history.get(req.params.id) || [] });
+  const w = String(req.query.window || '15m');
+  if (WINDOWS[w]) return res.json({ window: w, step: 60_000, points: store.series(req.params.id, WINDOWS[w] * 3600_000) });
+  return res.json({ window: '15m', samples: poller.history.get(req.params.id) || [] });
+});
+
+/**
+ * Reboot a dual-boot machine into its other OS — through ojee-remote, which
+ * holds the ssh credential and the fixed command (a one-shot BootNext). Needs
+ * `confirm: true` like every action that takes a machine away.
+ */
+app.post('/api/hosts/:id/boot', async (req, res) => {
+  const host = config.hosts.find((h) => h.id === req.params.id);
+  if (!host) return res.status(404).json({ error: 'no such host' });
+  if (req.body?.confirm !== true) return res.status(400).json({ error: 'send {"confirm": true}' });
+  const to = req.body?.to ? String(req.body.to).toLowerCase() : null;
+  if (to && !/^[a-z0-9-]{1,32}$/.test(to)) return res.status(400).json({ error: 'bad target' });
+  try {
+    const out = await remote.boot(host, to);
+    console.log(`[boot] ${host.id} -> ${to || 'other'} (${req.get('x-console-user') || 'local'})`);
+    remote.tick().catch(() => {});
+    return res.json(out);
+  } catch (e) {
+    return res.status(e.status && e.status < 600 ? e.status : 502).json({ error: e.message });
+  }
 });
 
 /** Logs, for hosts whose API has them. Proxied rather than re-implemented. */
@@ -370,9 +320,9 @@ app.get('/api/events', (req, res) => {
   const send = (event, data) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
-  send('state', poller.snapshot());
+  send('state', view());
 
-  const onUpdate = (s) => send('state', s);
+  const onUpdate = () => send('state', view());
   poller.on('update', onUpdate);
   // The console's own subscription (?router=1) catches up on what it missed.
   const router = req.query.router === '1';

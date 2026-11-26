@@ -91,7 +91,7 @@ export function loadConfig() {
       };
     });
 
-  const defaultGrace = Number(process.env.FLEET_DOWN_GRACE_MS || raw.downGraceMs || 300_000);
+  const defaultGrace = Number(process.env.FLEET_DOWN_GRACE_MS || raw.downGraceMs || 180_000);
   for (const h of hosts) {
     if (!Number.isFinite(h.graceMs)) h.graceMs = defaultGrace;
   }
@@ -102,6 +102,11 @@ export function loadConfig() {
     // Polling every 10s across three machines is nothing, and it is the
     // difference between a page that is current and one that is a minute old.
     intervalMs: Number(process.env.FLEET_POLL_MS || raw.intervalMs || 10_000),
+    // Where the two-day minute history is kept (a volume in the container).
+    dataDir: process.env.FLEET_DATA_DIR || raw.dataDir || path.join(HERE, '..', 'data'),
+    // The ojee-remote gateway, for Screen / Shell / Files, lock state and
+    // boot switching on the host cards. Unset: those parts are simply absent.
+    remoteOrigin: process.env.FLEET_REMOTE_ORIGIN || raw.remoteOrigin || '',
     historyLength: Number(process.env.FLEET_HISTORY || raw.historyLength || 90),
     sustain: {
       ms: Number(process.env.FLEET_SUSTAIN_MS || raw.sustainMs || HYSTERESIS.ms),

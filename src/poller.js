@@ -29,6 +29,7 @@ import * as agentAdapter from './adapters/agent.js';
 import * as loqAdapter from './adapters/loq.js';
 import * as localAdapter from './adapters/local.js';
 import * as satelliteAdapter from './adapters/satellite.js';
+import * as mirrorAdapter from './adapters/mirror.js';
 
 const ADAPTERS = {
   teg: tegAdapter,
@@ -36,6 +37,7 @@ const ADAPTERS = {
   loq: loqAdapter,
   local: localAdapter,
   satellite: satelliteAdapter,
+  mirror: mirrorAdapter,
 };
 
 /**
@@ -175,7 +177,7 @@ export class Poller extends EventEmitter {
 
     // Always present, whichever way the probe went: the API and the UI should
     // not have to ask whether a field exists before reading it.
-    next.graceMs = Number.isFinite(host.graceMs) ? host.graceMs : 0;
+    next.graceMs = Number.isFinite(this.overrides.graceMs) ? this.overrides.graceMs : Number.isFinite(host.graceMs) ? host.graceMs : 0;
 
     if (next.online) {
       this.lastSeen.set(host.id, this.now());
@@ -185,7 +187,7 @@ export class Poller extends EventEmitter {
     } else {
       // Keep the last good picture alongside the failure.
       const downSince = prev?.downSince || this.now();
-      const graceMs = Number.isFinite(host.graceMs) ? host.graceMs : 0;
+      const graceMs = Number.isFinite(this.overrides.graceMs) ? this.overrides.graceMs : Number.isFinite(host.graceMs) ? host.graceMs : 0;
       next = {
         ...next,
         cpu: next.cpu ?? prev?.cpu ?? null,
