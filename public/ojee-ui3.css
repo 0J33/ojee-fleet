@@ -669,3 +669,10 @@ html.sheet-lock .main,html.sheet-lock .page-scroll{overflow:hidden!important;tou
    (search, palette, forms). Pinch zoom is also off (viewport meta). */
 @media (max-width:1199px){input,select,textarea,[contenteditable="true"]{font-size:16px!important}}
 html{touch-action:manipulation}
+/* iPhone: the frame is pinned to the screen and the document itself never
+   scrolls. With a 100dvh frame inside a scrollable body, Safari's toolbar
+   changing size left a few px of document scroll, and the bottom bar's
+   safe-area spacing came out wrong until the bar itself was scrolled. */
+html:has(body>.shell),html:has(#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
+body:has(>.shell),body:has(>#app.shell){height:100%;overflow:hidden;overscroll-behavior:none}
+.shell{position:fixed;inset:0;height:auto}
